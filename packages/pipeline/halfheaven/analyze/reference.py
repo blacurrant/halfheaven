@@ -16,6 +16,7 @@ from halfheaven.groq.client import GroqClient
 from halfheaven.media.probe import probe
 from halfheaven.render.video import extract_frame
 from halfheaven.media.audio import extract_audio
+from halfheaven.render.fonts import CATEGORIES
 from halfheaven.schemas import (
     CaptionProfile,
     FramingProfile,
@@ -25,11 +26,31 @@ from halfheaven.schemas import (
     TrimProfile,
 )
 
-VISION_PROMPT = """You are looking at one frame of a short-form vertical video that has a
-burned-in caption. Describe only the caption's STYLE. Return ONLY JSON:
-{"all_caps": bool, "words_per_card": int, "mode": "word_by_word"|"phrase"|"static_title",
- "anim": "none"|"pop"|"fade"|"slide", "stroke_heavy": bool}
-Do not report positions or coordinates."""
+# A stressed word is set noticeably larger than the body, or the effect reads as
+# a mistake rather than emphasis.
+EMPHASIS_SIZE_RATIO = 2.6
+EMPHASIS_FALLBACK = "didone"
+
+
+def _valid_category(value: object, fallback: str) -> str:
+    """Model output, so verified against what we can actually render."""
+    return value if isinstance(value, str) and value in CATEGORIES else fallback
+
+
+VISION_PROMPT = """You are looking at frames of a short-form vertical video with burned-in
+captions. Describe only the TYPE. Return ONLY JSON:
+{"all_caps": bool, "words_per_card": int,
+ "mode": "word_by_word"|"phrase"|"static_title",
+ "anim": "none"|"pop"|"fade"|"slide", "stroke_heavy": bool,
+ "body_font_category": one of ["mono","grotesque","geometric","didone","slab","display"],
+ "emphasis_font_category": one of the same list, or null if every caption uses one face}
+
+body_font_category is the face used for ordinary running dialogue.
+emphasis_font_category is any second, visually distinct face used to stress single
+words - typically larger. Judge by letterform: "mono" has identical letter widths,
+"didone" has thick stems with hairline serifs, "slab" has heavy square serifs,
+"display" is a heavy condensed poster face.
+Do not report positions or coordinates - those are measured separately."""
 
 
 def build_style_profile(
@@ -92,6 +113,7 @@ def build_style_profile(
     band = detect_persistent_caption(video)
     if band is None:
         return profile
+    emphasis = profile.emphasis
 
     captions = CaptionProfile(
         present=True,
@@ -106,6 +128,7 @@ def build_style_profile(
         frame = extract_frame(video, info.duration * 0.5, work_dir / "style_frame.png")
         try:
             style = client.vision_json(VISION_PROMPT, [frame])
+            body_category = _valid_category(style.get("body_font_category"), "grotesque")
             captions = captions.model_copy(
                 update={
                     "all_caps": bool(style.get("all_caps", False)),
@@ -113,9 +136,21 @@ def build_style_profile(
                     "mode": style.get("mode", "phrase"),
                     "anim": style.get("anim", "pop"),
                     "stroke_heavy": bool(style.get("stroke_heavy", True)),
+                    "font_category": body_category,
+                }
+            )
+            emphasis = emphasis.model_copy(
+                update={
+                    "font_category": _valid_category(
+                        style.get("emphasis_font_category"), EMPHASIS_FALLBACK
+                    ),
+                    "fill_hex": captions.fill_hex,
+                    "stroke_hex": captions.stroke_hex,
+                    "anchor": captions.anchor,
+                    "size_pct": round(captions.size_pct * EMPHASIS_SIZE_RATIO, 4),
                 }
             )
         except Exception:
             pass  # measured geometry is still usable without the semantic pass
 
-    return profile.model_copy(update={"captions": captions})
+    return profile.model_copy(update={"captions": captions, "emphasis": emphasis})

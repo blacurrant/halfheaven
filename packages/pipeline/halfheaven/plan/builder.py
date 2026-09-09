@@ -11,9 +11,21 @@ from dataclasses import dataclass, field
 from halfheaven.groq.asr import Transcript
 from halfheaven.plan.timeline import Timeline
 from halfheaven.plan.transcript import kept_spans
-from halfheaven.schemas import Canvas, Caption, EditProgram, MusicBed, SfxHit, StyleProfile, VideoClip
+from halfheaven.schemas import (
+    Canvas,
+    Caption,
+    EditProgram,
+    MusicBed,
+    SfxHit,
+    StyleProfile,
+    TextRun,
+    VideoClip,
+)
 
 DEFAULT_SFX_FAMILY = "whoosh"
+# Style names the program's style table must define.
+BODY_STYLE = "default"
+EMPHASIS_STYLE = "emphasis"
 
 
 @dataclass(frozen=True)
@@ -31,6 +43,9 @@ class Decisions:
     cuts: list[tuple[int, int]] = field(default_factory=list)
     caption_chunks: list[CaptionChunk] = field(default_factory=list)
     punch_word_indices: list[int] = field(default_factory=list)
+    # Words the speaker stresses. Drives type, not framing - a word can deserve
+    # a larger face without deserving a push-in.
+    emphasis_word_indices: list[int] = field(default_factory=list)
     music_src: str | None = None
 
 
@@ -80,21 +95,40 @@ def build_program(
         for index, (start, end) in enumerate(spans)
     ]
 
+    emphasised = set(decisions.emphasis_word_indices)
     captions: list[Caption] = []
     for chunk in decisions.caption_chunks:
         indices = sorted(chunk.word_indices)
         surviving = [i for i in indices if not _is_cut(i, decisions.cuts)]
         if not surviving:
             continue
-        start = timeline.to_program(transcript.words[surviving[0]].start)
         end = timeline.to_program(transcript.words[surviving[-1]].end)
-        if start is None or end is None or end <= start:
+        if end is None:
             continue
+
+        # One run per word, timed on the program clock, so the renderer can
+        # reveal them in turn and style individual words differently.
+        runs: list[TextRun] = []
+        for index in surviving:
+            word = transcript.words[index]
+            moment = timeline.to_program(word.start)
+            if moment is None:
+                continue
+            runs.append(
+                TextRun(
+                    text=word.text,
+                    style=EMPHASIS_STYLE if index in emphasised else BODY_STYLE,
+                    t=moment,
+                )
+            )
+        if not runs or end <= runs[0].t:
+            continue
+
         captions.append(
             Caption(
-                t=start,
-                duration=end - start,
-                text=" ".join(transcript.words[i].text for i in surviving),
+                t=runs[0].t,
+                duration=end - runs[0].t,
+                runs=runs,
                 anchor=profile.captions.anchor,
                 anim=profile.captions.anim,
                 emphasis=chunk.emphasis,

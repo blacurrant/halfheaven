@@ -9,10 +9,15 @@ import pytest
 from PIL import Image
 
 from halfheaven.render.captions import render_caption
-from halfheaven.schemas import Canvas, CaptionProfile
+from halfheaven.schemas import Canvas, CaptionProfile, TextRun
 
 CANVAS = Canvas(width=540, height=960, fps=30)
 PROFILE = CaptionProfile(present=True, anchor=(0.5, 0.75), size_pct=0.05, fill_hex="#FFE94A")
+
+
+def card(text, path, profile=PROFILE):
+    """A single-style caption card, the common case."""
+    return render_caption([TextRun(text=text)], CANVAS, {"default": profile}, path)
 
 
 def alpha_of(path):
@@ -20,24 +25,24 @@ def alpha_of(path):
 
 
 def test_card_matches_the_canvas_size(tmp_path):
-    path = render_caption("HELLO", CANVAS, PROFILE, tmp_path / "c.png")
+    path = card("HELLO", tmp_path / "c.png", PROFILE)
     assert Image.open(path).size == (540, 960)
 
 
 def test_card_is_transparent_apart_from_the_text(tmp_path):
-    alpha = alpha_of(render_caption("HELLO", CANVAS, PROFILE, tmp_path / "c.png"))
+    alpha = alpha_of(card("HELLO", tmp_path / "c.png", PROFILE))
     assert (alpha == 0).mean() > 0.85
 
 
 def test_text_is_drawn_at_the_profile_anchor(tmp_path):
-    alpha = alpha_of(render_caption("HELLO", CANVAS, PROFILE, tmp_path / "c.png"))
+    alpha = alpha_of(card("HELLO", tmp_path / "c.png", PROFILE))
     rows, cols = np.nonzero(alpha)
     assert rows.mean() / 960 == pytest.approx(0.75, abs=0.05)
     assert cols.mean() / 540 == pytest.approx(0.50, abs=0.05)
 
 
 def test_text_is_drawn_in_the_profile_fill_colour(tmp_path):
-    path = render_caption("HELLO", CANVAS, PROFILE, tmp_path / "c.png")
+    path = card("HELLO", tmp_path / "c.png", PROFILE)
     pixels = np.array(Image.open(path))
     opaque = pixels[pixels[:, :, 3] > 250]
     # the glyph body is the brightest opaque cluster; the stroke is black
@@ -47,7 +52,7 @@ def test_text_is_drawn_in_the_profile_fill_colour(tmp_path):
 
 def test_long_text_wraps_instead_of_overflowing_the_frame(tmp_path):
     long_text = "THIS IS A VERY LONG CAPTION THAT CANNOT POSSIBLY FIT ON ONE LINE"
-    alpha = alpha_of(render_caption(long_text, CANVAS, PROFILE, tmp_path / "c.png"))
+    alpha = alpha_of(card(long_text, tmp_path / "c.png", PROFILE))
     _, cols = np.nonzero(alpha)
     assert cols.min() >= 0 and cols.max() <= 539
     rows, _ = np.nonzero(alpha)
@@ -56,7 +61,7 @@ def test_long_text_wraps_instead_of_overflowing_the_frame(tmp_path):
 
 
 def test_empty_text_produces_a_fully_transparent_card(tmp_path):
-    alpha = alpha_of(render_caption("", CANVAS, PROFILE, tmp_path / "c.png"))
+    alpha = alpha_of(card("", tmp_path / "c.png", PROFILE))
     assert alpha.max() == 0
 
 
@@ -71,7 +76,7 @@ NO_STROKE = CaptionProfile(present=True, anchor=(0.5, 0.5), size_pct=0.08,
 
 
 def test_a_caption_always_gets_an_outline_even_when_the_reference_had_none(tmp_path):
-    path = render_caption("HELLO", CANVAS, NO_STROKE, tmp_path / "c.png")
+    path = card("HELLO", tmp_path / "c.png", NO_STROKE)
     pixels = np.array(Image.open(path))
     opaque = pixels[pixels[:, :, 3] > 250]
     darkest = opaque[opaque[:, :3].sum(axis=1).argmin()]
@@ -81,6 +86,6 @@ def test_a_caption_always_gets_an_outline_even_when_the_reference_had_none(tmp_p
 def test_a_heavy_stroke_is_thicker_than_the_minimum(tmp_path):
     heavy = CaptionProfile(present=True, anchor=(0.5, 0.5), size_pct=0.08,
                            fill_hex="#FFE94A", stroke_heavy=True)
-    thin_alpha = alpha_of(render_caption("HELLO", CANVAS, NO_STROKE, tmp_path / "thin.png"))
-    heavy_alpha = alpha_of(render_caption("HELLO", CANVAS, heavy, tmp_path / "heavy.png"))
+    thin_alpha = alpha_of(card("HELLO", tmp_path / "thin.png", NO_STROKE))
+    heavy_alpha = alpha_of(card("HELLO", tmp_path / "heavy.png", heavy))
     assert (heavy_alpha > 0).sum() > (thin_alpha > 0).sum()

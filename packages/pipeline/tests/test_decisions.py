@@ -104,3 +104,29 @@ def test_merging_never_creates_a_cut_beyond_the_limit():
     # two adjacent short cuts must not merge into one long one
     payload = {"cuts": [{"from": 10, "to": 17}, {"from": 16, "to": 24}]}
     assert parse_decisions(payload, n_words=239, max_cut_words=8).cuts == [(10, 17), (16, 24)]
+
+
+# --- emphasis ----------------------------------------------------------------
+# Separate from punch-ins on purpose: a word can deserve a larger typeface
+# without deserving a camera push-in, and vice versa.
+
+
+def test_emphasis_words_are_parsed():
+    assert parse_decisions({"emphasis": [2, 7]}, n_words=N_WORDS).emphasis_word_indices == [2, 7]
+
+
+def test_emphasis_indices_outside_the_transcript_are_dropped():
+    assert parse_decisions({"emphasis": [3, 999, -1]}, n_words=N_WORDS).emphasis_word_indices == [3]
+
+
+def test_duplicate_emphasis_indices_collapse():
+    assert parse_decisions({"emphasis": [4, 4, 4]}, n_words=N_WORDS).emphasis_word_indices == [4]
+
+
+def test_no_emphasis_key_yields_none():
+    assert parse_decisions({}, n_words=N_WORDS).emphasis_word_indices == []
+
+
+def test_emphasis_is_independent_of_punch_ins():
+    decisions = parse_decisions({"emphasis": [2], "punch_ins": [8]}, n_words=N_WORDS)
+    assert decisions.emphasis_word_indices == [2] and decisions.punch_word_indices == [8]

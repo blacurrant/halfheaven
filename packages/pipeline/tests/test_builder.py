@@ -60,7 +60,7 @@ def test_caption_is_placed_on_the_program_timeline_not_the_source():
 
 def test_caption_text_joins_its_words():
     program = build(caption_chunks=[CaptionChunk(word_indices=[2, 3])])
-    assert program.captions[0].text == "thing is,"
+    assert program.captions[0].plain_text == "thing is,"
 
 
 def test_caption_whose_words_were_all_cut_is_dropped():
@@ -100,3 +100,50 @@ def test_music_bed_is_carried_over_when_the_reference_has_one():
     program = build(profile=profile, music_src="bed.mp3")
     assert program.music.gain_db == pytest.approx(-16.0)
     assert program.music.duck_db == pytest.approx(-8.0)
+
+
+# --- word-level captions ------------------------------------------------------
+# Captions carry one run per word, timed from Whisper, so the renderer can
+# reveal them one at a time and style individual words differently.
+
+
+def test_each_caption_word_becomes_its_own_run():
+    program = build(caption_chunks=[CaptionChunk(word_indices=[0, 1, 2])])
+    assert [run.text for run in program.captions[0].runs] == ["So", "the", "thing"]
+
+
+def test_each_run_carries_its_own_program_time():
+    # program time, not source time: the first kept word sits at 0.0 even
+    # though it starts at 0.02 in the source
+    program = build(caption_chunks=[CaptionChunk(word_indices=[0, 1, 2])])
+    times = [run.t for run in program.captions[0].runs]
+    assert times == pytest.approx([0.0, 0.18, 0.34], abs=0.01)
+
+
+def test_run_times_are_shifted_by_earlier_cuts():
+    # drop words 4-8, so word 9 lands earlier in the program than in the source
+    program = build(cuts=[(4, 9)], caption_chunks=[CaptionChunk(word_indices=[9, 10])])
+    assert program.captions[0].runs[0].t == pytest.approx(0.88, abs=0.01)
+
+
+def test_a_caption_of_several_words_reveals_word_by_word():
+    program = build(caption_chunks=[CaptionChunk(word_indices=[0, 1, 2])])
+    assert program.captions[0].reveals_word_by_word is True
+
+
+def test_an_emphasised_word_gets_the_emphasis_style():
+    program = build(
+        caption_chunks=[CaptionChunk(word_indices=[0, 1, 2])],
+        emphasis_word_indices=[1],
+    )
+    assert [run.style for run in program.captions[0].runs] == ["default", "emphasis", "default"]
+
+
+def test_words_without_emphasis_all_use_the_body_style():
+    program = build(caption_chunks=[CaptionChunk(word_indices=[0, 1])])
+    assert {run.style for run in program.captions[0].runs} == {"default"}
+
+
+def test_cut_words_never_appear_as_runs():
+    program = build(cuts=[(1, 2)], caption_chunks=[CaptionChunk(word_indices=[0, 1, 2])])
+    assert [run.text for run in program.captions[0].runs] == ["So", "thing"]

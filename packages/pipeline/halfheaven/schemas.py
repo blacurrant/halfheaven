@@ -47,14 +47,49 @@ class VideoClip(BaseModel):
         return self
 
 
+class TextRun(BaseModel):
+    """One styled span of a caption - in practice, one word.
+
+    `style` names an entry in EditProgram.styles, which is what lets a single
+    card mix a monospace body with a large serif emphasis. `t` is the program
+    time the word appears; when set on every run, the card is revealed word by
+    word rather than all at once.
+    """
+
+    text: str
+    style: str = "default"
+    t: float | None = Field(default=None, ge=0)
+
+
 class Caption(BaseModel):
     t: float = Field(ge=0, description="program time, seconds")
     duration: float = Field(gt=0)
-    text: str
+    # `text` is the simple case; `runs` the styled one. Exactly one is required
+    # and runs is what the renderer reads, so text is normalised into it.
+    text: str | None = None
+    runs: list[TextRun] = Field(default_factory=list)
     style: str = "default"
     anchor: tuple[float, float] = (0.5, 0.72)
     anim: Literal["none", "pop", "fade", "slide"] = "pop"
     emphasis: bool = False
+
+    @property
+    def plain_text(self) -> str:
+        return " ".join(run.text for run in self.runs)
+
+    @property
+    def reveals_word_by_word(self) -> bool:
+        return len(self.runs) > 1 and all(run.t is not None for run in self.runs)
+
+    @model_validator(mode="after")
+    def _normalise_runs(self) -> "Caption":
+        if not self.runs:
+            if not self.text:
+                raise ValueError("a caption needs either text or runs")
+            object.__setattr__(
+                self, "runs", [TextRun(text=word, style=self.style) for word in self.text.split()]
+            )
+        return self
 
 
 class SfxHit(BaseModel):
@@ -146,6 +181,9 @@ class PunchProfile(BaseModel):
 
 class CaptionProfile(BaseModel):
     present: bool = False
+    # A type category, not a typeface: identifying a specific font from pixels
+    # is unreliable, so we match character using fonts we may embed.
+    font_category: str = "grotesque"
     mode: Literal["none", "word_by_word", "phrase", "static_title"] = "none"
     anchor: tuple[float, float] = (0.5, 0.72)
     size_pct: float = Field(default=0.06, gt=0, description="cap height as fraction of frame height")
@@ -197,6 +235,13 @@ class StyleProfile(BaseModel):
     trim: TrimProfile = Field(default_factory=TrimProfile)
     punch: PunchProfile = Field(default_factory=PunchProfile)
     captions: CaptionProfile = Field(default_factory=CaptionProfile)
+    # The face used for single stressed words. The reference pairs a monospace
+    # body with a large high-contrast serif; this is that second system.
+    emphasis: CaptionProfile = Field(
+        default_factory=lambda: CaptionProfile(
+            present=True, font_category="didone", size_pct=0.13, all_caps=True
+        )
+    )
     sfx: SfxProfile = Field(default_factory=SfxProfile)
     music: MusicProfile = Field(default_factory=MusicProfile)
     grade: GradeProfile = Field(default_factory=GradeProfile)

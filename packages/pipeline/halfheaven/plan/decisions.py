@@ -86,5 +86,15 @@ def parse_decisions(
     punches = sorted(
         {i for i in (_exact_index(p, n_words) for p in payload.get("punch_ins") or []) if i is not None}
     )
+    # Kept separate from punch-ins: a word can deserve a larger typeface without
+    # deserving a camera push-in, and vice versa.
+    emphasis = sorted(
+        {i for i in (_exact_index(e, n_words) for e in payload.get("emphasis") or []) if i is not None}
+    )
 
-    return Decisions(cuts=cuts, caption_chunks=chunks, punch_word_indices=punches)
+    return Decisions(
+        cuts=cuts,
+        caption_chunks=chunks,
+        punch_word_indices=punches,
+        emphasis_word_indices=emphasis,
+    )

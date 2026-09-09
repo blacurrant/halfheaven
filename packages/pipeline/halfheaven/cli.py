@@ -45,6 +45,10 @@ def main(argv: list[str] | None = None) -> int:
     if profile.captions.present:
         print(f"      captions at {profile.captions.anchor} fill={profile.captions.fill_hex} "
               f"max_words={profile.captions.max_words}")
+        print(f"      type: body={profile.captions.font_category} "
+              f"({profile.captions.size_pct:.3f}) "
+              f"emphasis={profile.emphasis.font_category} "
+              f"({profile.emphasis.size_pct:.3f})")
     if profile.framing.letterbox_top_pct or profile.framing.letterbox_bottom_pct:
         print(f"      letterbox {profile.framing.letterbox_top_pct:.3f} / "
               f"{profile.framing.letterbox_bottom_pct:.3f}")
@@ -76,7 +80,8 @@ def main(argv: list[str] | None = None) -> int:
     removed = sum(stop - start for start, stop in decisions.cuts)
     print(f"      {len(decisions.cuts)} cuts removing {removed} words, "
           f"{len(decisions.caption_chunks)} caption cards, "
-          f"{len(decisions.punch_word_indices)} punch-ins")
+          f"{len(decisions.punch_word_indices)} punch-ins, "
+          f"{len(decisions.emphasis_word_indices)} emphasised words")
 
     print("[4/5] building program")
     program = build_program(
@@ -104,10 +109,18 @@ def main(argv: list[str] | None = None) -> int:
         look = look.model_copy(update={"lut": str(lut)})
         print(f"      grade: target LAB mean={tuple(round(v, 1) for v in target_stats.mean)} "
               f"-> reference, strength {profile.grade.strength}")
-    program = program.model_copy(update={"styles": {"default": profile.captions}, "look": look})
+    program = program.model_copy(
+        update={
+            "styles": {"default": profile.captions, "emphasis": profile.emphasis},
+            "look": look,
+        }
+    )
     (work / "edit_program.json").write_text(program.model_dump_json(indent=2))
+    reveal = sum(1 for c in program.captions if c.reveals_word_by_word)
+    stressed = sum(1 for c in program.captions for r in c.runs if r.style == "emphasis")
     print(f"      {len(program.video)} clips, {program.duration:.1f}s "
-          f"(from {target_info.duration:.1f}s), {len(program.captions)} captions")
+          f"(from {target_info.duration:.1f}s), {len(program.captions)} captions "
+          f"({reveal} word-by-word, {stressed} stressed words)")
 
     print(f"[5/5] rendering -> {args.out}")
     render(program, args.out, work_dir=work)
