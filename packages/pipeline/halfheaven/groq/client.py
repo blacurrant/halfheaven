@@ -61,12 +61,26 @@ class GroqClient:
             )
         return parse_transcript(payload)
 
-    def chat_json(self, system: str, user: str, temperature: float = 0.2) -> dict[str, Any]:
+    def chat_json(
+        self,
+        system: str,
+        user: str,
+        temperature: float = 0.2,
+        max_tokens: int = 8000,
+        reasoning_effort: str | None = "low",
+    ) -> dict[str, Any]:
+        # gpt-oss is a reasoning model: without a generous ceiling and a low
+        # effort setting it spends the budget thinking and returns empty JSON.
+        body: dict[str, Any] = {}
+        if reasoning_effort:
+            body["reasoning_effort"] = reasoning_effort
         payload = self._post(
             "/chat/completions",
             json={
+                **body,
                 "model": self.config.llm_model,
                 "temperature": temperature,
+                "max_tokens": max_tokens,
                 "response_format": {"type": "json_object"},
                 "messages": [
                     {"role": "system", "content": system},

@@ -36,3 +36,11 @@ def test_survives_a_large_distractor_shape(caption_frame):
 
 def test_frame_with_no_caption_returns_nothing(blank_frame):
     assert detect_caption_box(blank_frame()) is None
+
+
+def test_fill_is_the_glyph_colour_not_an_average_with_its_background(caption_frame):
+    # Observed on real footage: sampling too low a percentile mixed the glyph
+    # with its dark surround and reported muddy olive for a bright gold caption.
+    box = detect_caption_box(caption_frame(fill=(255, 214, 10)))
+    red, green, blue = (int(box.fill_hex[i:i+2], 16) for i in (1, 3, 5))
+    assert red > 230 and green > 190 and blue < 60

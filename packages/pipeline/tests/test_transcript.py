@@ -4,6 +4,8 @@ The LLM only ever emits *word indices*; it never sees a timestamp. This module
 turns those indices into real time spans using Whisper's word timings, which is
 what structurally prevents hallucinated cut points.
 """
+import pytest
+
 from halfheaven.plan.transcript import Word, kept_spans
 
 
@@ -52,3 +54,39 @@ def test_adjacent_cuts_merge_into_a_single_gap():
 
 def test_cutting_everything_yields_no_spans():
     assert kept_spans(TRANSCRIPT, cuts=[(0, 11)]) == []
+
+
+# --- silence compression ------------------------------------------------------
+# The largest pacing lever, and entirely deterministic: Whisper reports the gaps
+# between words, so dead air is removed without asking a model anything.
+
+PAUSED = [
+    w("one", 0.00, 0.30),
+    w("two", 0.30, 0.60),
+    w("three", 2.10, 2.40),   # 1.5s of dead air before this word
+    w("four", 2.40, 2.70),
+]
+
+
+def test_a_gap_longer_than_max_silence_splits_the_span():
+    assert len(kept_spans(PAUSED, cuts=[], max_silence=0.2)) == 2
+
+
+def test_a_gap_shorter_than_max_silence_is_left_alone():
+    assert kept_spans(PAUSED, cuts=[], max_silence=2.0) == [(0.0, 2.7)]
+
+
+def test_the_retained_pause_equals_max_silence():
+    first, second = kept_spans(PAUSED, cuts=[], max_silence=0.2)
+    assert first[1] - 0.60 == pytest.approx(0.1)     # half the allowance after
+    assert 2.10 - second[0] == pytest.approx(0.1)    # half before
+    assert (first[1] - 0.60) + (2.10 - second[0]) == pytest.approx(0.2)
+
+
+def test_omitting_max_silence_keeps_the_whole_span():
+    assert kept_spans(PAUSED, cuts=[]) == [(0.0, 2.7)]
+
+
+def test_silence_compression_and_cuts_combine():
+    spans = kept_spans(PAUSED, cuts=[(1, 2)], max_silence=0.2)
+    assert spans[0] == pytest.approx((0.0, 0.30))

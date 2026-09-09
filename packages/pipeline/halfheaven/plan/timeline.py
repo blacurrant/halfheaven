@@ -24,6 +24,11 @@ class Timeline:
             elapsed += end - start
         self.duration: float = elapsed
 
+    @property
+    def seams(self) -> list[float]:
+        """Program times where one clip joins the next - the perceived cuts."""
+        return self._offsets[1:]
+
     def to_program(self, source_t: float) -> float | None:
         for (start, end), offset in zip(self.spans, self._offsets):
             if start <= source_t <= end:

@@ -13,31 +13,58 @@ from halfheaven.models import Span, Word
 __all__ = ["Word", "Span", "kept_spans"]
 
 
-def kept_spans(words: Sequence[Word], cuts: Sequence[tuple[int, int]]) -> list[Span]:
-    """Time spans that survive `cuts`.
+def _surviving_runs(count: int, cuts: Sequence[tuple[int, int]]) -> list[list[int]]:
+    """Consecutive word indices that no cut removes."""
+    dropped = [False] * count
+    for start, stop in cuts:
+        for i in range(max(0, start), min(count, stop)):
+            dropped[i] = True
+
+    runs: list[list[int]] = []
+    current: list[int] = []
+    for index, is_dropped in enumerate(dropped):
+        if is_dropped:
+            if current:
+                runs.append(current)
+                current = []
+        else:
+            current.append(index)
+    if current:
+        runs.append(current)
+    return runs
+
+
+def kept_spans(
+    words: Sequence[Word],
+    cuts: Sequence[tuple[int, int]],
+    max_silence: float | None = None,
+) -> list[Span]:
+    """Time spans that survive `cuts`, with long pauses compressed.
 
     `cuts` are half-open word-index ranges, `[a, b)`. They may overlap, sit out
     of order, or run past the ends of the transcript; all are clamped. Runs of
     surviving words collapse into one span, so adjacent cuts produce one gap
     rather than a zero-length seam.
+
+    `max_silence` caps the pause between consecutive words. A longer gap splits
+    the span, keeping half the allowance on each side so the join lands in dead
+    air instead of clipping the speech either side of it. This is the largest
+    pacing lever in the system and it needs no model at all - Whisper already
+    measured every gap.
     """
     if not words:
         return []
 
-    dropped = [False] * len(words)
-    for start, stop in cuts:
-        for i in range(max(0, start), min(len(words), stop)):
-            dropped[i] = True
-
     spans: list[Span] = []
-    run_start: int | None = None
-    for i, is_dropped in enumerate(dropped):
-        if is_dropped:
-            if run_start is not None:
-                spans.append((words[run_start].start, words[i - 1].end))
-                run_start = None
-        elif run_start is None:
-            run_start = i
-    if run_start is not None:
-        spans.append((words[run_start].start, words[-1].end))
+    for run in _surviving_runs(len(words), cuts):
+        span_start = words[run[0]].start
+        previous = run[0]
+        for index in run[1:]:
+            gap = words[index].start - words[previous].end
+            if max_silence is not None and gap > max_silence:
+                allowance = max_silence / 2
+                spans.append((span_start, words[previous].end + allowance))
+                span_start = words[index].start - allowance
+            previous = index
+        spans.append((span_start, words[previous].end))
     return spans

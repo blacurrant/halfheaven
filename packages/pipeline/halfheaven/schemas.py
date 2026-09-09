@@ -78,6 +78,9 @@ class EditProgram(BaseModel):
     captions: list[Caption] = Field(default_factory=list)
     sfx: list[SfxHit] = Field(default_factory=list)
     music: MusicBed | None = None
+    # Caption.style names an entry here. Carrying the visual style inside the
+    # program is what lets the renderer be a pure function of it.
+    styles: dict[str, "CaptionProfile"] = Field(default_factory=dict)
 
     @property
     def duration(self) -> float:
@@ -170,3 +173,6 @@ class StyleProfile(BaseModel):
     sfx: SfxProfile = Field(default_factory=SfxProfile)
     music: MusicProfile = Field(default_factory=MusicProfile)
     grade: GradeProfile = Field(default_factory=GradeProfile)
+
+
+EditProgram.model_rebuild()
