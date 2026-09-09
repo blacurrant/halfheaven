@@ -30,3 +30,8 @@ dist/
 
 # os
 .DS_Store
+
+# web app
+/.web-work/
+apps/web/.next/
+apps/web/node_modules/
