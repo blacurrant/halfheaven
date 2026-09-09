@@ -116,6 +116,9 @@ class Look(BaseModel):
     lut: str | None = None
     letterbox_top_pct: float = Field(default=0.0, ge=0.0, lt=0.5)
     letterbox_bottom_pct: float = Field(default=0.0, ge=0.0, lt=0.5)
+    # A grayscale video marking the subject. When set, captions are composited
+    # underneath it, so the speaker occludes the text.
+    matte: str | None = None
 
     @property
     def is_letterboxed(self) -> bool:

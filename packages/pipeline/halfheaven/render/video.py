@@ -103,6 +103,9 @@ def build_finish_command(
     content_h = max(2, height - top_px - bottom_px)
 
     inputs = ["-i", str(base_path)]
+    # Counted explicitly: a concat input contributes four argv elements, not
+    # two, so deriving indices from len(inputs) silently mislabels streams.
+    input_count = 1
     steps: list[str] = []
     label = "[0:v]"
 
@@ -116,11 +119,32 @@ def build_finish_command(
             f"{label}scale={width}:{content_h},pad={width}:{height}:0:{top_px}:black[vp]"
         )
         label = "[vp]"
+    caption_stream: str | None = None
     if program.captions:
         # One caption track, one overlay: constant cost in the caption count.
         listing = build_caption_track(program, work_dir)
         inputs += ["-f", "concat", "-safe", "0", "-i", str(listing)]
-        steps.append(f"{label}[1:v]overlay=0:0:eof_action=pass[vc]")
+        caption_stream = f"[{input_count}:v]"
+        input_count += 1
+
+    if look.matte:
+        # Split the picture: one copy takes the caption, the other becomes the
+        # cut-out subject that is laid back on top. That ordering is the effect.
+        inputs += ["-i", str(look.matte)]
+        matte_stream = f"[{input_count}:v]"
+        input_count += 1
+        steps.append(f"{label}split=2[bg][fg]")
+        if caption_stream:
+            steps.append(f"[bg]{caption_stream}overlay=0:0:eof_action=pass[withcap]")
+            under = "[withcap]"
+        else:
+            under = "[bg]"
+        steps.append(f"[fg]format=yuva420p[fga]")
+        steps.append(f"[fga]{matte_stream}alphamerge[subject]")
+        steps.append(f"{under}[subject]overlay=0:0:eof_action=pass[vc]")
+        label = "[vc]"
+    elif caption_stream:
+        steps.append(f"{label}{caption_stream}overlay=0:0:eof_action=pass[vc]")
         label = "[vc]"
 
     command = [ffmpeg(), "-v", "error", "-y", *inputs]
