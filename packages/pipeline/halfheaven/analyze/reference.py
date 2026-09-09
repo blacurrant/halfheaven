@@ -8,13 +8,22 @@ from __future__ import annotations
 
 import pathlib
 
+from halfheaven.analyze.framing import detect_letterbox
+from halfheaven.analyze.grade import measure_color_stats
 from halfheaven.analyze.shots import detect_shots, pacing
 from halfheaven.analyze.text_regions import detect_persistent_caption
 from halfheaven.groq.client import GroqClient
 from halfheaven.media.probe import probe
 from halfheaven.render.video import extract_frame
 from halfheaven.media.audio import extract_audio
-from halfheaven.schemas import CaptionProfile, PacingProfile, StyleProfile, TrimProfile
+from halfheaven.schemas import (
+    CaptionProfile,
+    FramingProfile,
+    GradeProfile,
+    PacingProfile,
+    StyleProfile,
+    TrimProfile,
+)
 
 VISION_PROMPT = """You are looking at one frame of a short-form vertical video that has a
 burned-in caption. Describe only the caption's STYLE. Return ONLY JSON:
@@ -44,6 +53,20 @@ def build_style_profile(
             p90_shot=measured.p90_shot,
             cuts_per_min=measured.cuts_per_min,
         ),
+    )
+
+    # Framing first: colour statistics sampled through letterbox bars would
+    # darken every grade derived from this reference.
+    framing = detect_letterbox(video)
+    stats = measure_color_stats(video, framing=framing)
+    profile = profile.model_copy(
+        update={
+            "framing": FramingProfile(
+                letterbox_top_pct=framing.top_pct,
+                letterbox_bottom_pct=framing.bottom_pct,
+            ),
+            "grade": GradeProfile(measured=True, lab_mean=stats.mean, lab_std=stats.std),
+        }
     )
 
     # How long a pause the reference tolerates is part of its style, so measure

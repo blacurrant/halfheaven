@@ -18,8 +18,11 @@ from halfheaven.media.probe import probe
 from halfheaven.plan.builder import build_program
 from halfheaven.plan.chunking import chunk_captions
 from halfheaven.plan.editor import decide
+from halfheaven.analyze.framing import detect_letterbox
+from halfheaven.analyze.grade import measure_color_stats
+from halfheaven.render.lut import ColorStats, write_lut
 from halfheaven.render.video import render
-from halfheaven.schemas import Canvas
+from halfheaven.schemas import Canvas, Look
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -42,6 +45,12 @@ def main(argv: list[str] | None = None) -> int:
     if profile.captions.present:
         print(f"      captions at {profile.captions.anchor} fill={profile.captions.fill_hex} "
               f"max_words={profile.captions.max_words}")
+    if profile.framing.letterbox_top_pct or profile.framing.letterbox_bottom_pct:
+        print(f"      letterbox {profile.framing.letterbox_top_pct:.3f} / "
+              f"{profile.framing.letterbox_bottom_pct:.3f}")
+    if profile.grade.measured:
+        print(f"      grade LAB mean={tuple(round(v, 1) for v in profile.grade.lab_mean)} "
+              f"std={tuple(round(v, 1) for v in profile.grade.lab_std)}")
     (work / "style_profile.json").write_text(profile.model_dump_json(indent=2))
 
     print(f"[2/5] transcribing target {args.target}")
@@ -77,7 +86,25 @@ def main(argv: list[str] | None = None) -> int:
         profile=profile,
         decisions=decisions,
     )
-    program = program.model_copy(update={"styles": {"default": profile.captions}})
+    look = Look(
+        letterbox_top_pct=profile.framing.letterbox_top_pct,
+        letterbox_bottom_pct=profile.framing.letterbox_bottom_pct,
+    )
+    if profile.grade.measured:
+        # Source stats are the target's own look; target stats are the
+        # reference's. Strength is a dial because pushing bright footage all the
+        # way to a dark reference turns it muddy.
+        target_stats = measure_color_stats(args.target, framing=detect_letterbox(args.target))
+        lut = write_lut(
+            source=target_stats,
+            target=ColorStats(mean=profile.grade.lab_mean, std=profile.grade.lab_std),
+            out_path=work / "grade.cube",
+            strength=profile.grade.strength,
+        )
+        look = look.model_copy(update={"lut": str(lut)})
+        print(f"      grade: target LAB mean={tuple(round(v, 1) for v in target_stats.mean)} "
+              f"-> reference, strength {profile.grade.strength}")
+    program = program.model_copy(update={"styles": {"default": profile.captions}, "look": look})
     (work / "edit_program.json").write_text(program.model_dump_json(indent=2))
     print(f"      {len(program.video)} clips, {program.duration:.1f}s "
           f"(from {target_info.duration:.1f}s), {len(program.captions)} captions")

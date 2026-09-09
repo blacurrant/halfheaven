@@ -27,3 +27,9 @@ $FF -v error -y -f lavfi -t 3.0 -i "testsrc2=s=$SZ:r=$R" \
 # Rendered with Pillow because this ffmpeg has no drawtext/libass - which is
 # also how the real renderer composites captions.
 "${PYTHON:-python3}" ./make_title_fixture.py
+
+# Same three shots, letterboxed with 85px bars top and bottom of a 568px frame
+# (0.1496 each). Ground truth for letterbox detection.
+$FF -v error -y -i three_shots_at_1.0_3.0.mp4 \
+  -vf "scale=320:398,pad=320:568:0:85:black" -pix_fmt yuv420p \
+  letterboxed_bars_0.1496.mp4

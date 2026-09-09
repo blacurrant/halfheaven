@@ -71,6 +71,22 @@ class MusicBed(BaseModel):
     duck_release: float = Field(default=0.35, gt=0)
 
 
+class Look(BaseModel):
+    """The reference's appearance, applied to the whole program.
+
+    `lut` is a path to a .cube baked from a statistical LAB match; letterbox
+    percentages are of full frame height and are filled with black.
+    """
+
+    lut: str | None = None
+    letterbox_top_pct: float = Field(default=0.0, ge=0.0, lt=0.5)
+    letterbox_bottom_pct: float = Field(default=0.0, ge=0.0, lt=0.5)
+
+    @property
+    def is_letterboxed(self) -> bool:
+        return self.letterbox_top_pct > 0.0 or self.letterbox_bottom_pct > 0.0
+
+
 class EditProgram(BaseModel):
     version: int = 1
     canvas: Canvas
@@ -78,6 +94,7 @@ class EditProgram(BaseModel):
     captions: list[Caption] = Field(default_factory=list)
     sfx: list[SfxHit] = Field(default_factory=list)
     music: MusicBed | None = None
+    look: Look = Field(default_factory=Look)
     # Caption.style names an entry here. Carrying the visual style inside the
     # program is what lets the renderer be a pure function of it.
     styles: dict[str, "CaptionProfile"] = Field(default_factory=dict)
@@ -152,9 +169,19 @@ class MusicProfile(BaseModel):
 
 
 class GradeProfile(BaseModel):
-    palette: list[str] = Field(default_factory=list, description="dominant colours, hex")
-    mean_saturation: float = 0.0
-    mean_luma: float = 0.0
+    """Measured LAB statistics of the reference's content band."""
+
+    measured: bool = False
+    lab_mean: tuple[float, float, float] = (50.0, 0.0, 0.0)
+    lab_std: tuple[float, float, float] = (20.0, 10.0, 10.0)
+    # How hard to push the target toward the reference. Full strength can turn
+    # bright footage muddy, so this is a dial rather than a constant.
+    strength: float = Field(default=0.7, ge=0.0, le=1.0)
+
+
+class FramingProfile(BaseModel):
+    letterbox_top_pct: float = Field(default=0.0, ge=0.0, lt=0.5)
+    letterbox_bottom_pct: float = Field(default=0.0, ge=0.0, lt=0.5)
 
 
 class StyleProfile(BaseModel):
@@ -173,6 +200,7 @@ class StyleProfile(BaseModel):
     sfx: SfxProfile = Field(default_factory=SfxProfile)
     music: MusicProfile = Field(default_factory=MusicProfile)
     grade: GradeProfile = Field(default_factory=GradeProfile)
+    framing: FramingProfile = Field(default_factory=FramingProfile)
 
 
 EditProgram.model_rebuild()

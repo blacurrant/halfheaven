@@ -105,3 +105,52 @@ def render_caption(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     image.save(out_path)
     return out_path
+
+
+def build_caption_track(program, work_dir: str | pathlib.Path) -> pathlib.Path:
+    """Write an ffmpeg concat list describing the whole caption track.
+
+    Captions never overlap, so the entire track is one timeline of still cards
+    separated by transparent gaps. Rendering them as one input instead of one
+    input per caption is what keeps memory constant: the previous design held a
+    full-size RGBA still open for every caption and got the process killed.
+    """
+    # Absolute, because the concat demuxer resolves 'file' entries relative to
+    # the list file's own directory - a relative work dir would double up.
+    work_dir = pathlib.Path(work_dir).resolve()
+    work_dir.mkdir(parents=True, exist_ok=True)
+    canvas = program.canvas
+
+    blank = work_dir / "blank_card.png"
+    if not blank.exists():
+        Image.new("RGBA", (canvas.width, canvas.height), (0, 0, 0, 0)).save(blank)
+
+    spans: list[tuple[pathlib.Path, float]] = []
+    cursor = 0.0
+    for index, caption in enumerate(sorted(program.captions, key=lambda c: c.t)):
+        start = max(cursor, caption.t)
+        if start - cursor > 1e-4:
+            spans.append((blank, start - cursor))
+        style = program.styles.get(caption.style) or CaptionProfile(present=True)
+        card = render_caption(caption.text, canvas, style, work_dir / f"caption_{index:04d}.png")
+        end = min(program.duration, start + caption.duration)
+        if end > start:
+            spans.append((card, end - start))
+            cursor = end
+
+    if program.duration - cursor > 1e-4:
+        spans.append((blank, program.duration - cursor))
+    if not spans:
+        spans.append((blank, program.duration))
+
+    lines: list[str] = ["# caption track"]
+    for path, duration in spans:
+        lines.append(f"file '{path}'")
+        lines.append(f"duration {duration:.4f}")
+    # The concat demuxer drops the final entry's duration unless the file is
+    # repeated, which would truncate the last caption.
+    lines.append(f"file '{spans[-1][0]}'")
+
+    listing = work_dir / "caption_track.txt"
+    listing.write_text("\n".join(lines) + "\n")
+    return listing
