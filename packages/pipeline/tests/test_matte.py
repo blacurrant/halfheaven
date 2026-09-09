@@ -124,3 +124,43 @@ def test_a_caption_is_hidden_where_the_subject_covers_it(tmp_path):
 
     assert visible_without_matte > 500, "caption should be visible with no matte"
     assert visible_behind_subject < visible_without_matte * 0.2
+
+
+# --- video-native segmenters --------------------------------------------------
+# The per-frame interface suits MediaPipe and misfits SAM2, whose whole
+# advantage is propagating one prompt through a clip with temporal memory.
+# Both shapes are accepted; a video-native one is asked for the whole clip.
+
+
+class WholeClipSubject:
+    """A video-native stand-in: sees the clip, returns a mask per frame."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def masks_for_video(self, video, size):
+        self.calls += 1
+        width, height = size
+        mask = np.zeros((height, width), dtype=np.uint8)
+        mask[height // 2 :, :] = 255
+        while True:
+            yield mask
+
+
+def test_a_video_native_segmenter_is_accepted(tmp_path):
+    out = write_matte_video(SOURCE, WholeClipSubject(), tmp_path / "m.mp4")
+    assert out.exists() and probe(out).duration == pytest.approx(4.5, abs=0.2)
+
+
+def test_a_video_native_segmenter_sees_the_clip_once(tmp_path):
+    segmenter = WholeClipSubject()
+    write_matte_video(SOURCE, segmenter, tmp_path / "m.mp4")
+    assert segmenter.calls == 1, "a video model must not be re-prompted per frame"
+
+
+def test_both_interfaces_produce_the_same_matte(tmp_path):
+    per_frame = write_matte_video(SOURCE, LowerHalfSubject(), tmp_path / "a.mp4")
+    whole_clip = write_matte_video(SOURCE, WholeClipSubject(), tmp_path / "b.mp4")
+    a = np.array(Image.open(extract_frame(per_frame, 1.0, tmp_path / "a.png")).convert("L"))
+    b = np.array(Image.open(extract_frame(whole_clip, 1.0, tmp_path / "b.png")).convert("L"))
+    assert np.abs(a.astype(int) - b.astype(int)).mean() < 8

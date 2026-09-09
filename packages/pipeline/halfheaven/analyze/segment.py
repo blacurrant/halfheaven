@@ -16,14 +16,28 @@ import cv2
 import numpy as np
 
 
-class Segmenter(Protocol):
+class FrameSegmenter(Protocol):
+    """Judges each frame independently. Cheap, and prone to temporal flicker."""
+
     def mask_for(self, frame: np.ndarray) -> np.ndarray:
         """A HxW uint8 mask for one BGR frame: 255 subject, 0 background."""
 
 
+class VideoSegmenter(Protocol):
+    """Sees the whole clip. What a model with temporal memory, like SAM2, needs.
+
+    Asking such a model for one frame at a time would throw away the very thing
+    that makes it worth its cost, so it is handed the clip and yields masks in
+    order.
+    """
+
+    def masks_for_video(self, video: pathlib.Path, size: tuple[int, int]):
+        """Yield one HxW uint8 mask per frame, in order."""
+
+
 def write_matte_video(
     video: str | pathlib.Path,
-    segmenter: Segmenter,
+    segmenter: FrameSegmenter | VideoSegmenter,
     out_path: str | pathlib.Path,
     feather: int = 5,
 ) -> pathlib.Path:
@@ -43,12 +57,25 @@ def write_matte_video(
         writer = cv2.VideoWriter(
             str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height), isColor=True
         )
+        # A video-native model is handed the clip once; a per-frame one is
+        # asked frame by frame.
+        stream = (
+            segmenter.masks_for_video(video, (width, height))
+            if hasattr(segmenter, "masks_for_video")
+            else None
+        )
         try:
             while True:
                 ok, frame = capture.read()
                 if not ok:
                     break
-                mask = segmenter.mask_for(frame)
+                if stream is not None:
+                    try:
+                        mask = next(stream)
+                    except StopIteration:
+                        break
+                else:
+                    mask = segmenter.mask_for(frame)
                 if mask.shape[:2] != (height, width):
                     mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_LINEAR)
                 if feather > 0:
