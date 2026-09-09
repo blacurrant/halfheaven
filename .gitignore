@@ -1,0 +1,32 @@
+# secrets
+.env
+.env.local
+.env.*.local
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# node
+node_modules/
+.next/
+out/
+dist/
+
+# media + job artifacts (never commit video)
+/media/
+/work/
+*.mp4
+*.mov
+*.wav
+*.m4a
+*.opus
+!**/tests/fixtures/**
+
+# os
+.DS_Store
