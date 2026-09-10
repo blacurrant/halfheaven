@@ -13,6 +13,7 @@ export async function POST(req: Request) {
   const form = await req.formData();
   const file = form.get("target");
   const styleId = String(form.get("styleId") ?? "");
+  const overrides = JSON.parse(String(form.get("overrides") ?? "{}"));
   if (!(file instanceof File)) {
     return Response.json({ error: "No video supplied." }, { status: 400 });
   }
@@ -23,6 +24,6 @@ export async function POST(req: Request) {
   fs.mkdirSync(path.dirname(staging), { recursive: true });
   fs.writeFileSync(staging, Buffer.from(await file.arrayBuffer()));
 
-  const job = await startJob({ styleId, targetPath: staging, targetName: file.name });
+  const job = await startJob({ styleId, targetPath: staging, targetName: file.name, overrides });
   return Response.json({ id: job.id });
 }

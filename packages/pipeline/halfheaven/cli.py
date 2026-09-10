@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
 import pathlib
 import sys
 
@@ -18,6 +19,7 @@ from halfheaven.media.probe import probe
 from halfheaven.plan.builder import build_program
 from halfheaven.plan.chunking import chunk_captions
 from halfheaven.plan.editor import decide
+from halfheaven.plan.overrides import apply_overrides
 from halfheaven.analyze.framing import detect_letterbox
 from halfheaven.analyze.grade import measure_color_stats
 from halfheaven.render.lut import ColorStats, write_lut
@@ -31,6 +33,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target", required=True, help="the footage to apply that style to")
     parser.add_argument("--out", default="out.mp4")
     parser.add_argument("--work", default="work")
+    parser.add_argument("--overrides", default="",
+                        help="JSON patch over the measured style profile")
     args = parser.parse_args(argv)
 
     work = pathlib.Path(args.work)
@@ -55,6 +59,11 @@ def main(argv: list[str] | None = None) -> int:
     if profile.grade.measured:
         print(f"      grade LAB mean={tuple(round(v, 1) for v in profile.grade.lab_mean)} "
               f"std={tuple(round(v, 1) for v in profile.grade.lab_std)}")
+    if args.overrides:
+        # What the creator asked for, layered over what we measured.
+        patch = json.loads(args.overrides)
+        profile = apply_overrides(profile, patch)
+        print(f"      adjusted: {', '.join(sorted(patch))}")
     (work / "style_profile.json").write_text(profile.model_dump_json(indent=2))
 
     print(f"[2/5] transcribing target {args.target}")

@@ -73,6 +73,7 @@ export async function startJob(opts: {
   styleId: string;
   targetPath: string;
   targetName: string;
+  overrides?: Record<string, unknown>;
 }): Promise<Job> {
   const id = randomUUID().slice(0, 8);
   const dir = workDir(id);
@@ -100,7 +101,9 @@ export async function startJob(opts: {
     // TTY, so without this every stage line arrives at once on exit and the
     // progress UI sits at its starting value until the job is already finished.
     ["-u", "-m", "halfheaven.cli", "--reference", reference, "--target", opts.targetPath,
-     "--out", out, "--work", dir],
+     "--out", out, "--work", dir,
+     ...(opts.overrides && Object.keys(opts.overrides).length
+       ? ["--overrides", JSON.stringify(opts.overrides)] : [])],
     { cwd: REPO, env: { ...process.env, PYTHONUNBUFFERED: "1", PYTHONPATH: path.join(REPO, "packages", "pipeline") } }
   );
 
