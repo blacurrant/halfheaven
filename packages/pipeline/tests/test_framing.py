@@ -10,7 +10,7 @@ import pytest
 from halfheaven.groq.asr import Transcript
 from halfheaven.models import Word
 from halfheaven.plan.builder import Decisions, build_program
-from halfheaven.schemas import Canvas, PunchProfile, StyleProfile
+from halfheaven.schemas import Canvas, PacingProfile, PunchProfile, StyleProfile
 
 CANVAS = Canvas(width=1080, height=1920, fps=30)
 
@@ -37,10 +37,16 @@ def test_the_take_is_split_into_several_segments():
     assert len(build().video) >= 4
 
 
-def test_neighbouring_segments_do_not_share_a_framing():
-    program = build(profile=StyleProfile(punch=PunchProfile(variety=1.0)))
-    got = scales(program)
-    assert all(a != b for a, b in zip(got, got[1:])), got
+def test_neighbouring_segments_may_share_a_framing():
+    # holding across short segments is the point: a framing that changes on
+    # every silence twitches rather than cuts
+    got = scales(build(profile=StyleProfile(punch=PunchProfile(variety=1.0))))
+    assert any(a == b for a, b in zip(got, got[1:])), got
+
+
+def test_the_framing_still_changes_over_the_video():
+    got = scales(build(profile=StyleProfile(punch=PunchProfile(variety=1.0))))
+    assert len(set(got)) >= 2, got
 
 
 def test_variety_off_leaves_every_segment_wide():
@@ -76,3 +82,49 @@ def test_framing_is_deterministic_for_the_same_input():
 def test_a_reframe_never_zooms_out_past_the_source():
     program = build(profile=StyleProfile(punch=PunchProfile(variety=1.0)))
     assert min(scales(program)) >= 1.0
+
+
+# --- how often it changes -----------------------------------------------------
+# Sixteen reframes in fifty-seven seconds reads as nervous, not paced. How long
+# to hold a framing is not a guess: the reference already told us how long it
+# holds a shot, and that measurement was being ignored.
+
+
+def changes(program):
+    got = scales(program)
+    return sum(1 for a, b in zip(got, got[1:]) if a != b)
+
+
+def calm(median_shot):
+    return StyleProfile(punch=PunchProfile(variety=1.0),
+                        pacing=PacingProfile(median_shot=median_shot, cuts_per_min=60 / median_shot))
+
+
+def test_a_slow_reference_reframes_less_than_a_fast_one():
+    slow = changes(build(profile=calm(7.0)))
+    fast = changes(build(profile=calm(1.5)))
+    assert slow < fast, f"slow={slow} fast={fast}"
+
+
+def test_a_slow_reference_holds_each_framing_for_a_while():
+    program = build(profile=calm(7.0))
+    held, current, run = [], None, 0.0
+    for clip in program.video:
+        key = (clip.scale_to, clip.crop_x)
+        if key != current and current is not None:
+            held.append(run)
+            run = 0.0
+        current = key
+        run += clip.end - clip.start
+    held.append(run)
+    # every held framing except possibly the last lasts a meaningful stretch
+    assert all(h >= 1.5 for h in held[:-1]), held
+
+
+def test_a_stressed_word_still_tightens_even_inside_a_hold():
+    program = build(profile=calm(7.0), punch_word_indices=[9])
+    assert max(scales(program)) > 1.0
+
+
+def test_variety_off_still_means_no_reframing():
+    assert set(scales(build(profile=StyleProfile(punch=PunchProfile(variety=0.0))))) == {1.0}

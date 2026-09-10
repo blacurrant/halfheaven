@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from halfheaven.groq.asr import Transcript
+from halfheaven.models import Span
 from halfheaven.plan.timeline import Timeline
 from halfheaven.plan.transcript import kept_spans
 from halfheaven.schemas import (
@@ -57,25 +58,57 @@ FRAMINGS: tuple[tuple[float, float], ...] = (
     (1.08, 0.56),   # slightly in, drifted right
     (1.28, 0.50),   # close, centred
 )
+# A framing held for less than this reads as a twitch rather than a shot.
+MIN_HOLD = 2.0
+MAX_HOLD = 9.0
 
 
-def _framing(index: int, total: int, is_punched: bool, profile: StyleProfile) -> dict[str, float]:
-    """Scale and crop centre for one segment.
+def _framings(
+    spans: list[Span], punched: set[int], profile: StyleProfile
+) -> list[dict[str, float | None]]:
+    """A framing for each segment, changing only as often as the style implies.
 
-    Deterministic: the same edit reframes the same way every render, so a
-    creator who asks for one change does not get a different cut everywhere
-    else. A stressed word always takes the tightest framing available.
+    How long to hold is not a guess: the reference already told us how long it
+    holds a shot. Sixteen reframes in a minute reads as nervous, and it was the
+    measured pacing - previously unused - that said so.
+
+    Deterministic, so a creator who asks for one change does not get a
+    different cut everywhere else.
     """
-    if is_punched:
-        scale, centre = max(FRAMINGS, key=lambda f: f[0])
-        return {"scale_to": max(scale, profile.punch.scale_mean), "crop_x": centre}
-    if profile.punch.variety <= 0 or total < 2:
-        return {"scale_to": None, "crop_x": 0.5}
-    scale, centre = FRAMINGS[index % len(FRAMINGS)]
-    # variety eases every framing back toward wide and centred
-    eased = 1.0 + (scale - 1.0) * profile.punch.variety
-    drift = 0.5 + (centre - 0.5) * profile.punch.variety
-    return {"scale_to": eased if eased > 1.0 else None, "crop_x": drift}
+    if profile.punch.variety <= 0 or len(spans) < 2:
+        return [
+            {"scale_to": FRAMINGS[-1][0] if i in punched else None, "crop_x": 0.5}
+            for i in range(len(spans))
+        ]
+
+    hold = min(MAX_HOLD, max(MIN_HOLD, profile.pacing.median_shot or MIN_HOLD))
+    variety = profile.punch.variety
+
+    out: list[dict[str, float | None]] = []
+    choice = 0
+    since = 0.0
+    for index, (start, end) in enumerate(spans):
+        if index in punched:
+            # a stressed word takes the tightest framing wherever it lands
+            scale, centre = max(FRAMINGS, key=lambda f: f[0])
+            out.append({"scale_to": max(scale, profile.punch.scale_mean), "crop_x": centre})
+            since = 0.0
+            choice = (choice + 1) % len(FRAMINGS)
+            continue
+
+        if since >= hold and index > 0:
+            choice = (choice + 1) % len(FRAMINGS)
+            since = 0.0
+
+        scale, centre = FRAMINGS[choice]
+        eased = 1.0 + (scale - 1.0) * variety
+        out.append({
+            "scale_to": eased if eased > 1.001 else None,
+            "crop_x": 0.5 + (centre - 0.5) * variety,
+        })
+        since += end - start
+
+    return out
 
 
 def _is_cut(index: int, cuts: list[tuple[int, int]]) -> bool:
@@ -113,10 +146,10 @@ def build_program(
                 punched.add(span_index)
                 break
 
+    framings = _framings(spans, punched, profile)
     video = [
-        VideoClip(src=source, start=start, end=end, ease=profile.punch.ease,
-                  **_framing(index, len(spans), index in punched, profile))
-        for index, (start, end) in enumerate(spans)
+        VideoClip(src=source, start=start, end=end, ease=profile.punch.ease, **framing)
+        for (start, end), framing in zip(spans, framings)
     ]
 
     emphasised = set(decisions.emphasis_word_indices)

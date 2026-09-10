@@ -14,7 +14,7 @@ CAPTION_PRESETS: dict[str, dict[str, Any]] = {
     "hormozi": {
         "label": "Word pop",
         "blurb": "Chunky caps, the word you're saying lights up",
-        "font_category": "grotesque", "font_weight": 900, "size_pct": 0.072,
+        "font_category": "grotesque", "font_weight": 800, "size_pct": 0.058,
         "grouping": "phrase", "max_words": 4, "reveal": "karaoke",
         "enter": "pop", "active": "colour", "active_fill_hex": "#FFE94A",
         "decor": "stroke", "stroke_heavy": True, "all_caps": True,
@@ -24,7 +24,7 @@ CAPTION_PRESETS: dict[str, dict[str, Any]] = {
     "beast": {
         "label": "Big and loud",
         "blurb": "One huge word at a time with a hard shadow",
-        "font_category": "display", "size_pct": 0.115,
+        "font_category": "display", "size_pct": 0.092,
         "grouping": "single", "max_words": 1, "reveal": "append",
         "enter": "pop", "pop_from": 0.7, "active": "none",
         "decor": "shadow_hard", "shadow_hex": "#000000", "shadow_offset_pct": 0.09,
@@ -64,7 +64,7 @@ CAPTION_PRESETS: dict[str, dict[str, Any]] = {
     "stacked": {
         "label": "Stacked",
         "blurb": "Words build down the middle of the frame",
-        "font_category": "condensed", "size_pct": 0.085,
+        "font_category": "condensed", "size_pct": 0.068,
         "grouping": "phrase", "max_words": 3, "reveal": "append",
         "enter": "pop", "active": "scale", "active_scale": 1.14,
         "decor": "stroke", "stroke_heavy": True, "layout": "stack",
@@ -103,14 +103,35 @@ def catalogue() -> list[dict[str, str]]:
 # What the reference decided and a look should not overrule: these are what
 # make the output resemble the video the creator pointed at.
 MEASURED_FIELDS = ("fill_hex", "anchor")
-# The emphasis face must stay distinct from the body, or stressed words vanish
-# into the line.
-EMPHASIS_PAIRS = {
-    "grotesque": "didone", "neutral": "didone", "geometric": "display",
-    "mono": "didone", "didone": "display", "slab": "display",
-    "rounded": "display", "display": "condensed", "condensed": "display",
-    "handwritten": "display",
+
+# Faces grouped by genre. Emphasis must cross a group boundary, because
+# contrast the eye registers comes from a change of voice - serif against sans,
+# monospace against proportional - not from weight. A Bebas body with an Anton
+# punch shipped once and read as "the same font, bigger and bolder".
+GROUPS: dict[str, tuple[str, ...]] = {
+    "sans": ("grotesque", "neutral", "geometric", "condensed", "display"),
+    "serif": ("didone", "slab"),
+    "mono": ("mono",),
+    "soft": ("rounded", "handwritten"),
 }
+_GROUP_OF = {face: group for group, faces in GROUPS.items() for face in faces}
+
+# Where each group turns for its opposite. Serif is the default counterweight
+# to a sans body because it changes letterform rather than just weight.
+_ACROSS = {"sans": "didone", "serif": "display", "mono": "didone", "soft": "didone"}
+
+# A stressed word larger than this stops reading as emphasis and starts
+# covering the frame.
+EMPHASIS_RATIO = 1.55
+EMPHASIS_MAX_PCT = 0.16
+
+
+def emphasis_face(body_category: str) -> str:
+    """A face for stressed words that contrasts with `body_category`."""
+    group = _GROUP_OF.get(body_category, "sans")
+    face = _ACROSS[group]
+    # a serif body must not take a serif punch even if the table drifts
+    return face if _GROUP_OF.get(face) != group else "mono"
 
 
 def apply_preset(profile: StyleProfile, name: str) -> StyleProfile:
@@ -128,12 +149,11 @@ def apply_preset(profile: StyleProfile, name: str) -> StyleProfile:
     }
     captions = look.model_copy(update=keep)
 
-    emphasis_face = EMPHASIS_PAIRS.get(captions.font_category, "didone")
     emphasis = profile.emphasis.model_copy(update={
-        "font_category": emphasis_face,
+        "font_category": emphasis_face(captions.font_category),
         "fill_hex": captions.fill_hex,
         "anchor": captions.anchor,
         "all_caps": True,
-        "size_pct": round(captions.size_pct * 2.4, 4),
+        "size_pct": round(min(captions.size_pct * EMPHASIS_RATIO, EMPHASIS_MAX_PCT), 4),
     })
     return profile.model_copy(update={"captions": captions, "emphasis": emphasis})

@@ -21,7 +21,7 @@ from halfheaven.schemas import Canvas, CaptionProfile, TextRun
 
 SIDE_MARGIN_PCT = 0.06
 LINE_SPACING = 1.18
-HEAVY_STROKE_RATIO = 0.10
+HEAVY_STROKE_RATIO = 0.072
 # A caption over arbitrary footage always needs edge separation, even when the
 # reference had none - its captions sat on a letterbox bar. Legibility is a
 # floor, not a style choice.

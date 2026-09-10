@@ -64,6 +64,10 @@ export default function Studio() {
   const [videoKey, setVideoKey] = useState(0);
   const [editMode, setEditMode] = useState(false);   // creators who only want captions never meet a timeline
   const [playhead, setPlayhead] = useState(0);
+  // Browsers only autoplay muted, so the preview starts silent and the first
+  // click turns it up. A comparison plays two files at once, so only the
+  // styled side carries sound - both would double every word.
+  const [sound, setSound] = useState(false);
   const [looks, setLooks] = useState<{ id: string; label: string; blurb: string }[]>([]);
   const [look, setLook] = useState("");
   const [styling, setStyling] = useState(false);
@@ -191,6 +195,12 @@ export default function Studio() {
           </span>
         )}
         {done && (
+          <button className="btn sm" aria-pressed={sound}
+            onClick={() => { setSound(v => !v); afterRef.current?.play().catch(() => {}); }}>
+            {sound ? "Sound on" : "Sound off"}
+          </button>
+        )}
+        {done && (
           <button className="btn sm" aria-pressed={editMode} onClick={() => setEditMode(v => !v)}>
             {editMode ? "Hide timeline" : "Edit mode"}
           </button>
@@ -297,7 +307,7 @@ export default function Studio() {
                 <>
                   <video ref={beforeRef} src={`/api/jobs/${job!.id}/media?v=before`} muted loop playsInline autoPlay />
                   <video ref={afterRef} className="after" src={`/api/jobs/${job!.id}/media?v=after&r=${videoKey}`}
-                    muted loop playsInline autoPlay
+                    muted={!sound} loop playsInline autoPlay
                     onTimeUpdate={e => { sync(); setPlayhead((e.target as HTMLVideoElement).currentTime); }} />
                   <span className="seam" /><span className="grip">↔</span>
                   <span className="handle" onPointerDown={drag} onPointerMove={drag} />

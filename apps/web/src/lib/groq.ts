@@ -2,9 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { REPO } from "./pipeline";
 
-/** The key lives in the repo's .env.local, which Next does not read from here. */
+/** A real environment variable wins; the repo's .env.local is the local
+ *  convenience, and Next does not read it from this directory. */
 export function groqKey(): string {
-  if (process.env.GROQ_API_KEY) return process.env.GROQ_API_KEY;
+  const fromEnv = process.env.GROQ_API_KEY?.trim();
+  if (fromEnv) return fromEnv;
   const file = path.join(REPO, ".env.local");
   if (!fs.existsSync(file)) return "";
   const line = fs.readFileSync(file, "utf8").split("\n").find((l) => l.startsWith("GROQ_API_KEY="));

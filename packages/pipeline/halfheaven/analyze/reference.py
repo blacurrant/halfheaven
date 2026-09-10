@@ -17,6 +17,7 @@ from halfheaven.media.probe import probe
 from halfheaven.render.video import extract_frame
 from halfheaven.media.audio import extract_audio
 from halfheaven.render.fonts import CATEGORIES
+from halfheaven.render.presets import EMPHASIS_MAX_PCT, EMPHASIS_RATIO, emphasis_face
 from halfheaven.schemas import (
     CaptionProfile,
     FramingProfile,
@@ -26,10 +27,6 @@ from halfheaven.schemas import (
     TrimProfile,
 )
 
-# A stressed word is set noticeably larger than the body, or the effect reads as
-# a mistake rather than emphasis.
-EMPHASIS_SIZE_RATIO = 2.6
-EMPHASIS_FALLBACK = "didone"
 
 
 def _valid_category(value: object, fallback: str) -> str:
@@ -140,15 +137,22 @@ def build_style_profile(
                     "font_category": body_category,
                 }
             )
+            # The model may name a face from the body's own genre, which reads
+            # as bigger-and-bolder rather than as a different voice.
+            suggested = _valid_category(style.get("emphasis_font_category"), "")
             emphasis = emphasis.model_copy(
                 update={
-                    "font_category": _valid_category(
-                        style.get("emphasis_font_category"), EMPHASIS_FALLBACK
+                    "font_category": (
+                        suggested if suggested and suggested != body_category
+                        and emphasis_face(body_category) != body_category
+                        and suggested == emphasis_face(body_category)
+                        else emphasis_face(body_category)
                     ),
                     "fill_hex": captions.fill_hex,
                     "stroke_hex": captions.stroke_hex,
                     "anchor": captions.anchor,
-                    "size_pct": round(captions.size_pct * EMPHASIS_SIZE_RATIO, 4),
+                    "size_pct": round(min(captions.size_pct * EMPHASIS_RATIO,
+                                          EMPHASIS_MAX_PCT), 4),
                 }
             )
         except Exception:

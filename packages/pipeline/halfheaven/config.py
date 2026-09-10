@@ -7,6 +7,10 @@ from dataclasses import dataclass
 
 
 def _load_env_local() -> None:
+    """Fill in anything the real environment did not already set.
+
+    setdefault, not assignment: a deployment sets real variables and should
+    never be overridden by a file that happens to be lying around."""
     here = pathlib.Path(__file__).resolve()
     for parent in here.parents:
         env = parent / ".env.local"
@@ -31,9 +35,12 @@ class Config:
     @classmethod
     def load(cls) -> "Config":
         _load_env_local()
-        key = os.environ.get("GROQ_API_KEY", "")
+        key = os.environ.get("GROQ_API_KEY", "").strip()
         if not key:
-            raise RuntimeError("GROQ_API_KEY missing - set it in .env.local at the repo root")
+            raise RuntimeError(
+                "GROQ_API_KEY is not set. Export it, or copy .env.example to "
+                ".env.local at the repo root and fill it in."
+            )
         return cls(
             api_key=key,
             # Groq rotates model IDs; these are pinned and verified at boot.
