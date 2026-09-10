@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pathlib
 from dataclasses import dataclass
+from typing import Sequence
 
 import cv2
 import numpy as np
@@ -82,3 +83,75 @@ def find_subject_prompt(
     centre_x = int(np.clip(centre_x, 1, width - 2))
     points = [(centre_x, int(np.clip(height * f, 1, height - 2))) for f in PROMPT_HEIGHTS]
     return SubjectPrompt(points=points, labels=[1] * len(points))
+
+
+# How far a tracked position may sit from centre. A subject is rarely pinned to
+# the very edge, and an over-eager crop that swings to the frame border looks
+# like a mistake rather than a camera move.
+TRACK_LIMIT = 0.34
+# Frames sampled per span. More is steadier and slower.
+TRACK_SAMPLES = 5
+
+
+def needs_reframe(info, canvas) -> bool:
+    """True when the source is wider, relative to its height, than the canvas.
+
+    Centre-cropping 16:9 into 9:16 discards two thirds of the width, so a
+    speaker standing off to one side is simply cropped out. Knowing that in
+    advance is what lets us follow them instead.
+    """
+    if not info.height or not canvas.height:
+        return False
+    return (info.width / info.height) > (canvas.width / canvas.height) * 1.05
+
+
+def _column_energy(frames: list[np.ndarray]) -> np.ndarray | None:
+    """Where the moving content is, column by column."""
+    if len(frames) < 2:
+        return None
+    motion = np.stack(frames).std(axis=0)
+    return cv2.GaussianBlur(motion, (31, 31), 0).sum(axis=0)
+
+
+def track_subject(
+    video: str | pathlib.Path,
+    spans: Sequence[tuple[float, float]],
+    samples: int = TRACK_SAMPLES,
+) -> list[float]:
+    """Where the subject sits during each span, as a fraction of frame width.
+
+    Motion is the signal, as it is for a single prompt: the speaker moves and
+    the room does not. Each result is pulled back toward centre, because
+    background movement and compression also register and a crop that swings to
+    the edge reads as a mistake. Deterministic, so the same footage reframes the
+    same way twice.
+    """
+    video = pathlib.Path(video)
+    if not spans:
+        return []
+
+    capture = cv2.VideoCapture(str(video))
+    try:
+        fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
+        width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1
+        track: list[float] = []
+
+        for start, end in spans:
+            frames: list[np.ndarray] = []
+            for index in range(samples):
+                at = start + (end - start) * (index + 0.5) / samples
+                capture.set(cv2.CAP_PROP_POS_FRAMES, int(at * fps))
+                ok, frame = capture.read()
+                if ok:
+                    frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32))
+
+            energy = _column_energy(frames)
+            centre = 0.5
+            if energy is not None and energy.max() > MOTION_THRESHOLD * energy.mean():
+                weights = np.clip(energy - energy.mean(), 0, None)
+                if weights.sum() > 0:
+                    centre = float((np.arange(width) * weights).sum() / weights.sum() / width)
+            track.append(round(float(np.clip(centre, 0.5 - TRACK_LIMIT, 0.5 + TRACK_LIMIT)), 4))
+        return track
+    finally:
+        capture.release()

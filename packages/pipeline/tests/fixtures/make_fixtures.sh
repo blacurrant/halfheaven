@@ -47,3 +47,6 @@ $FF -v error -y -f lavfi -t 4 -i "testsrc2=s=$SZ:r=$R" \
   -f lavfi -t 1.2 -i "sine=frequency=440:sample_rate=48000" \
   -filter_complex "[1:a][2:a][3:a]concat=n=3:v=0:a=1[a]" \
   -map 0:v -map "[a]" -pix_fmt yuv420p -c:a aac -shortest speech_with_gap.mp4
+
+# A 16:9 source whose subject moves across the frame, for auto-reframing.
+"${PYTHON:-python3}" ./make_wide_fixture.py

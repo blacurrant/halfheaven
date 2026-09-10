@@ -20,7 +20,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
     which === "before"
       ? fs.readdirSync(path.join(REPO, ".web-work", "staging"))
           .map((f) => path.join(REPO, ".web-work", "staging", f))
-          .find((f) => f.endsWith(job.targetName)) ?? ""
+          .sort()
+          .find((f) => f.endsWith(job.targetName) || job.targetName.endsWith("takes")) ?? ""
       : path.join(dir, "out.mp4");
 
   return serve(file, req);

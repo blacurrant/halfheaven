@@ -7,9 +7,11 @@ so a timing bug can only live here - not in a prompt.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Callable
 
 from halfheaven.groq.asr import Transcript
 from halfheaven.models import Span
+from halfheaven.plan.reel import Reel
 from halfheaven.plan.timeline import Timeline
 from halfheaven.plan.transcript import kept_spans
 from halfheaven.schemas import (
@@ -64,7 +66,8 @@ MAX_HOLD = 9.0
 
 
 def _framings(
-    spans: list[Span], punched: set[int], profile: StyleProfile
+    spans: list[Span], punched: set[int], profile: StyleProfile,
+    track: list[float] | None = None,
 ) -> list[dict[str, float | None]]:
     """A framing for each segment, changing only as often as the style implies.
 
@@ -75,9 +78,17 @@ def _framings(
     Deterministic, so a creator who asks for one change does not get a
     different cut everywhere else.
     """
+    def centre_for(index: int, fallback: float) -> float:
+        # a tracked position always wins: it is where the subject actually is,
+        # and on a wide source a patterned drift would crop them out
+        if track and index < len(track):
+            return float(min(1.0, max(0.0, track[index])))
+        return fallback
+
     if profile.punch.variety <= 0 or len(spans) < 2:
         return [
-            {"scale_to": FRAMINGS[-1][0] if i in punched else None, "crop_x": 0.5}
+            {"scale_to": FRAMINGS[-1][0] if i in punched else None,
+             "crop_x": centre_for(i, 0.5)}
             for i in range(len(spans))
         ]
 
@@ -91,7 +102,8 @@ def _framings(
         if index in punched:
             # a stressed word takes the tightest framing wherever it lands
             scale, centre = max(FRAMINGS, key=lambda f: f[0])
-            out.append({"scale_to": max(scale, profile.punch.scale_mean), "crop_x": centre})
+            out.append({"scale_to": max(scale, profile.punch.scale_mean),
+                        "crop_x": centre_for(index, centre)})
             since = 0.0
             choice = (choice + 1) % len(FRAMINGS)
             continue
@@ -104,7 +116,7 @@ def _framings(
         eased = 1.0 + (scale - 1.0) * variety
         out.append({
             "scale_to": eased if eased > 1.001 else None,
-            "crop_x": 0.5 + (centre - 0.5) * variety,
+            "crop_x": centre_for(index, 0.5 + (centre - 0.5) * variety),
         })
         since += end - start
 
@@ -131,6 +143,8 @@ def build_program(
     transcript: Transcript,
     profile: StyleProfile,
     decisions: Decisions,
+    tracker: Callable[[list[Span]], list[float]] | None = None,
+    reel: Reel | None = None,
 ) -> EditProgram:
     spans = kept_spans(transcript.words, decisions.cuts, max_silence=profile.trim.max_silence)
     if not spans:
@@ -146,11 +160,23 @@ def build_program(
                 punched.add(span_index)
                 break
 
-    framings = _framings(spans, punched, profile)
-    video = [
-        VideoClip(src=source, start=start, end=end, ease=profile.punch.ease, **framing)
-        for (start, end), framing in zip(spans, framings)
-    ]
+    # The tracker runs here because only now do we know where the cuts fell.
+    track = tracker(spans) if tracker else None
+    framings = _framings(spans, punched, profile, track)
+
+    # A span may cross from one take into the next. The renderer reads one file
+    # at a time, so it is split here - but both halves keep the span's framing,
+    # because a join between takes is not a reason to reframe.
+    video: list[VideoClip] = []
+    for (start, end), framing in zip(spans, framings):
+        pieces = reel.split((start, end)) if reel else [(source, start, end)]
+        for piece_src, piece_start, piece_end in pieces:
+            if piece_end - piece_start < 1e-3:
+                continue
+            video.append(VideoClip(src=piece_src, start=piece_start, end=piece_end,
+                                   ease=profile.punch.ease, **framing))
+    if not video:
+        raise ValueError("nothing survived the cut")
 
     emphasised = set(decisions.emphasis_word_indices)
     captions: list[Caption] = []

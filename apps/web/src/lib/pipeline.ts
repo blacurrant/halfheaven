@@ -103,7 +103,7 @@ function parseStage(line: string): number | null {
 
 export async function startJob(opts: {
   styleId: string;
-  targetPath: string;
+  targetPaths: string[];
   targetName: string;
   overrides?: Record<string, unknown>;
 }): Promise<Job> {
@@ -132,7 +132,7 @@ export async function startJob(opts: {
     // -u: Python block-buffers stdout when it is piped rather than attached to a
     // TTY, so without this every stage line arrives at once on exit and the
     // progress UI sits at its starting value until the job is already finished.
-    ["-u", "-m", "halfheaven.cli", "--reference", reference, "--target", opts.targetPath,
+    ["-u", "-m", "halfheaven.cli", "--reference", reference, "--target", ...opts.targetPaths,
      "--out", out, "--work", dir,
      ...(opts.overrides && Object.keys(opts.overrides).length
        ? ["--overrides", JSON.stringify(opts.overrides)] : [])],

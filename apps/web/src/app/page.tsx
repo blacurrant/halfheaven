@@ -49,7 +49,8 @@ const LOOK_ART: Record<string, { g: string; f: string; tag: string; blurb: strin
 export default function Studio() {
   const [styles, setStyles] = useState<Style[]>([]);
   const [styleId, setStyleId] = useState("night-interview");
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const file = files[0] ?? null;
   const [job, setJob] = useState<Job | null>(null);
   const [over, setOver] = useState(false);
   const [split, setSplit] = useState(50);
@@ -119,7 +120,8 @@ export default function Studio() {
   const start = useCallback(async (patch: Record<string, unknown> = overrides) => {
     if (!file) { fileInput.current?.click(); return; }
     const fd = new FormData();
-    fd.set("target", file); fd.set("styleId", styleId);
+    for (const item of files) fd.append("target", item);
+    fd.set("styleId", styleId);
     fd.set("overrides", JSON.stringify(patch));
     setUploaded(0);
     setJob({ id: "…", status: "running", stageIndex: -1, progress: 0.02, styleId, targetName: file.name });
@@ -134,7 +136,7 @@ export default function Studio() {
     setJob(d.id
       ? { id: d.id, status: "running", stageIndex: 0, progress: 0.08, styleId, targetName: file.name }
       : { id: "—", status: "error", stageIndex: 0, progress: 0, styleId, targetName: file.name, error: d.error });
-  }, [file, styleId, overrides]);
+  }, [files, file, styleId, overrides]);
 
   const say = useCallback(async (text: string) => {
     if (!text.trim() || thinking) return;
@@ -221,23 +223,30 @@ export default function Studio() {
           <div className="block">
             <span className="eyebrow">Your video</span>
             <input ref={fileInput} type="file" accept="video/*" hidden
-              onChange={e => setFile(e.target.files?.[0] ?? null)} />
+              multiple
+              onChange={e => setFiles([...(e.target.files ?? [])])} />
             {file ? (
               <div className="loaded">
                 <span className="thumb">▸</span>
                 <span style={{ flex: 1 }}>
-                  <span className="nm" style={{ display: "block" }}>{file.name}</span>
-                  <span className="tiny">{(file.size / 1e6).toFixed(0)} MB</span>
+                  <span className="nm" style={{ display: "block" }}>
+                    {files.length > 1 ? `${files.length} takes` : file.name}
+                  </span>
+                  <span className="tiny">
+                    {files.length > 1
+                      ? files.map(f => f.name).join(", ").slice(0, 40)
+                      : `${(file.size / 1e6).toFixed(0)} MB`}
+                  </span>
                 </span>
-                <button className="btn ghost sm" onClick={() => setFile(null)}>Change</button>
+                <button className="btn ghost sm" onClick={() => setFiles([])}>Change</button>
               </div>
             ) : (
               <button className={`drop${over ? " over" : ""}`} onClick={() => fileInput.current?.click()}
                 onDragOver={e => { e.preventDefault(); setOver(true); }}
                 onDragLeave={() => setOver(false)}
-                onDrop={e => { e.preventDefault(); setOver(false); setFile(e.dataTransfer.files?.[0] ?? null); }}>
+                onDrop={e => { e.preventDefault(); setOver(false); setFiles([...(e.dataTransfer.files ?? [])]); }}>
                 <span className="big">Drop your video here</span>
-                <span className="sub">Talk to camera, ums and all. It needs sound.</span>
+                <span className="sub">One take or several. Ums and all — it needs sound.</span>
               </button>
             )}
           </div>
