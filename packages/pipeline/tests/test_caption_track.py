@@ -51,7 +51,7 @@ def test_a_gap_before_the_first_caption_is_transparent(tmp_path):
 def test_the_caption_occupies_its_own_window(tmp_path):
     prog = program([Caption(t=2.0, duration=1.0, text="hi")])
     listing = entries(build_caption_track(prog, tmp_path))
-    assert listing[1][0].startswith("caption_") and listing[1][1] == pytest.approx(1.0)
+    assert listing[1][0].startswith("cap_") and listing[1][1] == pytest.approx(1.0)
 
 
 def test_a_program_with_no_captions_is_one_transparent_span(tmp_path):
@@ -62,13 +62,13 @@ def test_a_program_with_no_captions_is_one_transparent_span(tmp_path):
 def test_back_to_back_captions_need_no_gap_between_them(tmp_path):
     prog = program([Caption(t=0.0, duration=1.0, text="a"), Caption(t=1.0, duration=1.0, text="b")])
     listing = entries(build_caption_track(prog, tmp_path))
-    assert [name.startswith("caption_") for name, _ in listing[:2]] == [True, True]
+    assert [name.startswith("cap_") for name, _ in listing[:2]] == [True, True]
 
 
 def test_captions_are_ordered_by_time(tmp_path):
     prog = program([Caption(t=5.0, duration=1.0, text="late"), Caption(t=1.0, duration=1.0, text="early")])
     listing = entries(build_caption_track(prog, tmp_path))
-    cards = [name for name, _ in listing if name.startswith("caption_")]
+    cards = [name for name, _ in listing if name.startswith("cap_")]
     assert len(cards) == 2
     assert listing.index((cards[0], 1.0)) < listing.index((cards[1], 1.0))
 

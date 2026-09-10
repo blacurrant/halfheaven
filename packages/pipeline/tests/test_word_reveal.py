@@ -14,8 +14,11 @@ from halfheaven.render.captions import build_caption_track, render_caption
 from halfheaven.schemas import Canvas, Caption, CaptionProfile, EditProgram, TextRun, VideoClip
 
 CANVAS = Canvas(width=320, height=568, fps=30)
-BODY = CaptionProfile(present=True, size_pct=0.05, font_category="mono", fill_hex="#FFE94A")
-LOUD = CaptionProfile(present=True, size_pct=0.13, font_category="didone", fill_hex="#FFE94A")
+# enter="none" so these isolate the reveal axis; the pop axis has its own test
+BODY = CaptionProfile(present=True, size_pct=0.05, font_category="mono",
+                      fill_hex="#FFE94A", enter="none")
+LOUD = CaptionProfile(present=True, size_pct=0.13, font_category="didone",
+                      fill_hex="#FFE94A", enter="none")
 STYLES = {"default": BODY, "loud": LOUD}
 
 
@@ -79,7 +82,7 @@ def test_a_card_with_word_times_becomes_one_still_per_word(tmp_path):
         TextRun(text="one", t=0.0), TextRun(text="two", t=0.5), TextRun(text="three", t=1.0),
     ])
     cards = [n for n, _ in entries(build_caption_track(program([caption]), tmp_path))
-             if n.startswith("caption_")]
+             if n.startswith("cap_")]
     assert len(cards) == 3
 
 
@@ -88,7 +91,7 @@ def test_each_reveal_state_lasts_until_the_next_word(tmp_path):
         TextRun(text="one", t=0.0), TextRun(text="two", t=0.5), TextRun(text="three", t=1.0),
     ])
     durations = [d for n, d in entries(build_caption_track(program([caption]), tmp_path))
-                 if n.startswith("caption_")]
+                 if n.startswith("cap_")]
     assert durations == pytest.approx([0.5, 0.5, 0.5], abs=0.01)
 
 
@@ -97,7 +100,7 @@ def test_each_state_shows_more_text_than_the_one_before(tmp_path):
         TextRun(text="one", t=0.0), TextRun(text="two", t=0.5), TextRun(text="three", t=1.0),
     ])
     build_caption_track(program([caption]), tmp_path)
-    cards = sorted(tmp_path.glob("caption_*.png"))
+    cards = sorted(tmp_path.glob("cap_*.png"))
     inks = [ink(c) for c in cards]
     assert inks == sorted(inks) and inks[0] < inks[-1]
 
@@ -105,7 +108,7 @@ def test_each_state_shows_more_text_than_the_one_before(tmp_path):
 def test_a_card_without_word_times_stays_a_single_still(tmp_path):
     caption = Caption(t=0.0, duration=1.0, text="all at once")
     cards = [n for n, _ in entries(build_caption_track(program([caption]), tmp_path))
-             if n.startswith("caption_")]
+             if n.startswith("cap_")]
     assert len(cards) == 1
 
 
@@ -123,7 +126,8 @@ def test_an_emphasised_run_renders_larger_than_a_body_run(tmp_path):
 # wider than the frame and clipped at both edges ("IPHONE," lost both ends).
 # A single word cannot wrap, so it has to shrink.
 
-HUGE = CaptionProfile(present=True, size_pct=0.16, font_category="didone", fill_hex="#FFE94A")
+HUGE = CaptionProfile(present=True, size_pct=0.16, font_category="didone",
+                      fill_hex="#FFE94A", enter="none")
 
 
 def bounds(path):

@@ -1,159 +1,212 @@
 """Caption cards drawn with Pillow and composited as RGBA overlays.
 
-Chosen over ffmpeg's drawtext because drawtext cannot mix typefaces within a
-line or reveal words one at a time, it depends on how ffmpeg was compiled (the
-build here has neither drawtext nor libass), and a Pillow card can be asserted
-on pixel by pixel in a test.
+Chosen over ffmpeg's drawtext because drawtext cannot mix typefaces in a line,
+mark the word being spoken, or reveal words one at a time; it also depends on
+how ffmpeg was compiled (the build here has neither drawtext nor libass). A
+Pillow card can additionally be asserted on pixel by pixel in a test.
 
-A card is a list of styled runs. Runs name entries in the program's style
-table, which is what lets one line carry a monospace body and a large serif
-emphasis at once.
+Style is expressed as independent axes - grouping, reveal, enter, active
+treatment, decoration, layout - so the looks creators name are combinations
+rather than separate code paths.
 """
 from __future__ import annotations
 
 import pathlib
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
+from halfheaven.render.caption_frames import CaptionFrame, frames_for
 from halfheaven.render.fonts import load_font
 from halfheaven.schemas import Canvas, CaptionProfile, TextRun
 
 SIDE_MARGIN_PCT = 0.06
 LINE_SPACING = 1.18
 HEAVY_STROKE_RATIO = 0.10
-# A caption composited over arbitrary footage always needs edge separation, even
-# when the reference had none - the reference's captions sat on a letterbox bar.
-# Legibility is a floor, not a style choice.
+# A caption over arbitrary footage always needs edge separation, even when the
+# reference had none - its captions sat on a letterbox bar. Legibility is a
+# floor, not a style choice.
 MIN_STROKE_RATIO = 0.035
 
-_DEFAULT_PROFILE = CaptionProfile(present=True)
+_DEFAULT = CaptionProfile(present=True)
 
 
-def _hex_to_rgb(value: str) -> tuple[int, int, int]:
+def _rgb(value: str) -> tuple[int, int, int]:
     value = value.lstrip("#")
     return tuple(int(value[i : i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
 
 
+def _ease_out(t: float) -> float:
+    return 1 - (1 - max(0.0, min(1.0, t))) ** 3
+
+
 class _Token:
-    """One drawable word, carrying the style it was written in."""
+    """One drawable word at the size this frame wants it."""
 
-    __slots__ = ("text", "profile", "font", "size", "width", "stroke")
+    __slots__ = ("text", "font", "size", "width", "height", "is_active")
 
-    def __init__(self, text: str, profile: CaptionProfile, canvas: Canvas) -> None:
+    def __init__(self, text: str, profile: CaptionProfile, canvas: Canvas,
+                 factor: float, is_active: bool) -> None:
         self.text = text
-        self.profile = profile
-        self._resize(max(8, int(canvas.height * profile.size_pct)))
+        self.is_active = is_active
+        base = max(8, int(canvas.height * profile.size_pct))
+        self.size = max(6, int(base * factor))
+        self.font: ImageFont.FreeTypeFont = load_font(
+            profile.font_category, self.size, profile.font_weight)
+        self.width = self.font.getlength(text)
+        self.height = self.size
 
-    def _resize(self, size: int) -> None:
-        self.size = max(8, size)
-        self.font: ImageFont.FreeTypeFont = load_font(self.profile.font_category, self.size)
-        ratio = HEAVY_STROKE_RATIO if self.profile.stroke_heavy else MIN_STROKE_RATIO
-        self.stroke = max(1, int(self.size * ratio))
-        self.width = self.font.getlength(self.text)
+    def fit(self, max_width: float, profile: CaptionProfile) -> None:
+        """A single word cannot wrap, so an oversized one shrinks.
 
-    def fit_within(self, max_width: float) -> None:
-        """Shrink until the word fits.
-
-        A single word cannot wrap, so an emphasis face large enough to overflow
-        gets clipped at the frame edge - and Pillow clips silently, which is how
-        this shipped once already.
+        Pillow clips silently at the image edge, which is how a clipped caption
+        once shipped looking merely 'cropped'.
         """
         if self.width <= max_width or self.width <= 0:
             return
-        self._resize(int(self.size * max_width / self.width))
-        while self.width > max_width and self.size > 8:
-            self._resize(self.size - 1)
+        self.size = max(6, int(self.size * max_width / self.width))
+        self.font = load_font(profile.font_category, self.size, profile.font_weight)
+        self.width = self.font.getlength(self.text)
+        self.height = self.size
 
 
-def _tokenise(runs: list[TextRun], canvas: Canvas, styles: dict[str, CaptionProfile]) -> list[_Token]:
-    tokens: list[_Token] = []
-    for run in runs:
-        profile = styles.get(run.style) or _DEFAULT_PROFILE
+def _tokens(frame: CaptionFrame, canvas: Canvas, profile: CaptionProfile) -> list[_Token]:
+    out: list[_Token] = []
+    for index, run in enumerate(frame.shown):
         text = run.text.upper() if profile.all_caps else run.text
-        for word in text.split():
-            tokens.append(_Token(word, profile, canvas))
-    return tokens
+        factor = 1.0
+        if frame.entering == index and profile.enter == "pop":
+            factor = profile.pop_from + (1 - profile.pop_from) * _ease_out(frame.progress)
+        if frame.active == index and profile.active == "scale":
+            factor *= profile.active_scale
+        # A run is normally one word, but nothing requires it: a run holding a
+        # phrase must still wrap word by word rather than shrink to fit as one
+        # very long token.
+        for word in text.split() or [""]:
+            if word:
+                out.append(_Token(word, profile, canvas, factor, frame.active == index))
+    return out
 
 
-def _wrap(tokens: list[_Token], max_width: float, space: float) -> list[list[_Token]]:
+def _lines(tokens: list[_Token], profile: CaptionProfile, max_width: float,
+           space: float) -> list[list[_Token]]:
+    if profile.layout == "stack":
+        return [[t] for t in tokens]
     lines: list[list[_Token]] = []
     current: list[_Token] = []
     width = 0.0
     for token in tokens:
-        needed = token.width + (space if current else 0.0)
-        if current and width + needed > max_width:
+        need = token.width + (space if current else 0)
+        if current and width + need > max_width:
             lines.append(current)
             current, width = [token], token.width
         else:
             current.append(token)
-            width += needed
+            width += need
     if current:
         lines.append(current)
     return lines
 
 
-def render_caption(
-    runs: list[TextRun],
-    canvas: Canvas,
-    styles: dict[str, CaptionProfile],
-    out_path: str | pathlib.Path,
-) -> pathlib.Path:
-    """Draw one caption card, transparent everywhere except the text."""
+def render_frame(frame: CaptionFrame, canvas: Canvas, profile: CaptionProfile,
+                 out_path: str | pathlib.Path) -> pathlib.Path:
+    """Draw one caption still, transparent everywhere except the card."""
     out_path = pathlib.Path(out_path)
     image = Image.new("RGBA", (canvas.width, canvas.height), (0, 0, 0, 0))
-    tokens = _tokenise(runs, canvas, styles)
+    tokens = _tokens(frame, canvas, profile)
 
     if tokens:
         draw = ImageDraw.Draw(image)
         max_width = canvas.width * (1 - 2 * SIDE_MARGIN_PCT)
         for token in tokens:
-            token.fit_within(max_width)
+            token.fit(max_width, profile)
         space = max(t.font.getlength(" ") for t in tokens)
-        lines = _wrap(tokens, max_width, space)
+        lines = _lines(tokens, profile, max_width, space)
 
-        # Position from the largest run: for a single-word emphasis card that is
-        # the word itself, and for a mixed line it is the part the eye lands on.
-        dominant = max(tokens, key=lambda t: t.size).profile
-        line_heights = [max(t.size for t in line) * LINE_SPACING for line in lines]
-        block_height = sum(line_heights)
-        centre_x = canvas.width * dominant.anchor[0]
-        # Keep the whole block on screen: a tall emphasis line can push an
-        # anchored block past the bottom edge.
+        heights = [max(t.height for t in line) * LINE_SPACING for line in lines]
+        block = sum(heights)
+        widths = [sum(t.width for t in line) + space * (len(line) - 1) for line in lines]
+        centre_x = canvas.width * profile.anchor[0]
         margin = canvas.height * SIDE_MARGIN_PCT
-        top = canvas.height * dominant.anchor[1] - block_height / 2
-        top = max(margin, min(top, canvas.height - block_height - margin))
+        top = canvas.height * profile.anchor[1] - block / 2
+        top = max(margin, min(top, canvas.height - block - margin))
 
-        for line, height in zip(lines, line_heights):
-            line_width = sum(t.width for t in line) + space * (len(line) - 1)
-            x = centre_x - line_width / 2
-            baseline = top + height
+        pad = max(6, int(tokens[0].size * 0.28))
+        radius = int(tokens[0].size * profile.box_radius_pct * 2)
+
+        # a single panel behind the whole card
+        if profile.decor == "box":
+            widest = max(widths)
+            draw.rounded_rectangle(
+                [centre_x - widest / 2 - pad, top - pad * 0.7,
+                 centre_x + widest / 2 + pad, top + block + pad * 0.7],
+                radius=radius, fill=(*_rgb(profile.box_hex), int(255 * profile.box_alpha)))
+
+        # place every glyph, painting per-word backing as we go
+        placements: list[tuple[_Token, float, float]] = []
+        y = top
+        for line, height, width in zip(lines, heights, widths):
+            x = centre_x - width / 2
             for token in line:
-                # align on the baseline so mixed sizes sit on one line
-                y = baseline - token.size * LINE_SPACING
-                draw.text(
-                    (x, y), token.text, font=token.font,
-                    fill=(*_hex_to_rgb(token.profile.fill_hex), 255),
-                    stroke_width=token.stroke,
-                    stroke_fill=(*_hex_to_rgb(token.profile.stroke_hex), 255),
-                )
+                baseline = y + height - token.height * LINE_SPACING
+                placements.append((token, x, baseline))
                 x += token.width + space
-            top += height
+            y += height
+
+        for token, x, baseline in placements:
+            if profile.decor == "pill":
+                draw.rounded_rectangle(
+                    [x - pad * 0.5, baseline - pad * 0.25,
+                     x + token.width + pad * 0.5, baseline + token.height + pad * 0.35],
+                    radius=radius,
+                    fill=(*_rgb(profile.box_hex), int(255 * profile.box_alpha)))
+            if token.is_active and profile.active == "marker":
+                draw.rounded_rectangle(
+                    [x - pad * 0.35, baseline + token.height * 0.12,
+                     x + token.width + pad * 0.35, baseline + token.height * 1.05],
+                    radius=int(token.size * 0.12), fill=(*_rgb(profile.active_box_hex), 255))
+
+        # hard shadow sits under the glyphs; soft shadow is the same, blurred
+        if profile.decor in ("shadow_hard", "shadow_soft"):
+            layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
+            shade = ImageDraw.Draw(layer)
+            for token, x, baseline in placements:
+                offset = token.size * profile.shadow_offset_pct
+                shade.text((x + offset, baseline + offset), token.text, font=token.font,
+                           fill=(*_rgb(profile.shadow_hex), 235))
+            if profile.decor == "shadow_soft":
+                layer = layer.filter(ImageFilter.GaussianBlur(max(2, tokens[0].size * 0.08)))
+            image.alpha_composite(layer)
+            draw = ImageDraw.Draw(image)
+
+        stroke = 0
+        if profile.decor == "stroke":
+            ratio = HEAVY_STROKE_RATIO if profile.stroke_heavy else MIN_STROKE_RATIO
+            stroke = max(1, int(tokens[0].size * ratio))
+
+        for token, x, baseline in placements:
+            fill = profile.active_fill_hex if (token.is_active and profile.active == "colour") \
+                else profile.fill_hex
+            draw.text((x, baseline), token.text, font=token.font, fill=(*_rgb(fill), 255),
+                      stroke_width=stroke, stroke_fill=(*_rgb(profile.stroke_hex), 255))
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     image.save(out_path)
     return out_path
 
 
+def render_caption(runs: list[TextRun], canvas: Canvas, styles: dict[str, CaptionProfile],
+                   out_path: str | pathlib.Path) -> pathlib.Path:
+    """A whole card at rest, in the style its first run names."""
+    profile = styles.get(runs[0].style if runs else "default") or _DEFAULT
+    return render_frame(CaptionFrame(runs=list(runs), duration=0.0), canvas, profile, out_path)
+
+
 def build_caption_track(program, work_dir: str | pathlib.Path) -> pathlib.Path:
     """Write an ffmpeg concat list describing the whole caption track.
 
-    Captions never overlap, so the track is one timeline of still cards
-    separated by transparent gaps. Rendering it as a single input rather than
-    one input per caption is what keeps memory constant.
-
-    A card whose runs all carry times is expanded into one still per word, each
-    showing one more word than the last. Word-by-word reveal therefore costs
-    nothing structurally - it is simply more entries in the same list.
+    Captions never overlap, so the track is one timeline of stills separated by
+    transparent gaps. Rendering it as a single input rather than one input per
+    caption is what keeps memory constant.
     """
     # Absolute, because the concat demuxer resolves 'file' entries relative to
     # the list file's own directory - a relative work dir would double up.
@@ -169,39 +222,25 @@ def build_caption_track(program, work_dir: str | pathlib.Path) -> pathlib.Path:
     spans: list[tuple[pathlib.Path, float]] = []
     cursor = 0.0
     for index, caption in enumerate(sorted(program.captions, key=lambda c: c.t)):
+        profile = styles.get(caption.style) or _DEFAULT
         start = max(cursor, caption.t)
         if start - cursor > 1e-4:
             spans.append((blank, start - cursor))
-        end = min(program.duration, start + caption.duration)
-        if end <= start:
+        frames = frames_for(caption, profile, program.duration)
+        if not frames:
             continue
-
-        if caption.reveals_word_by_word:
-            times = sorted({run.t for run in caption.runs if run.t is not None})
-            for order, moment in enumerate(times):
-                state_start = max(start, moment)
-                state_end = times[order + 1] if order + 1 < len(times) else end
-                state_end = min(end, state_end)
-                if state_end <= state_start:
-                    continue
-                visible = [r for r in caption.runs if r.t is not None and r.t <= moment]
-                card = render_caption(
-                    visible, canvas, styles, work_dir / f"caption_{index:04d}_{order:02d}.png"
-                )
-                spans.append((card, state_end - state_start))
-        else:
-            card = render_caption(
-                caption.runs, canvas, styles, work_dir / f"caption_{index:04d}_00.png"
-            )
-            spans.append((card, end - start))
-        cursor = end
+        for order, frame in enumerate(frames):
+            card = render_frame(frame, canvas, profile,
+                                work_dir / f"cap_{index:04d}_{order:03d}.png")
+            spans.append((card, frame.duration))
+        cursor = min(program.duration, start + caption.duration)
 
     if program.duration - cursor > 1e-4:
         spans.append((blank, program.duration - cursor))
     if not spans:
         spans.append((blank, program.duration))
 
-    lines: list[str] = ["# caption track"]
+    lines = ["# caption track"]
     for path, duration in spans:
         lines.append(f"file '{path}'")
         lines.append(f"duration {duration:.4f}")

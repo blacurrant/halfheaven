@@ -59,3 +59,36 @@ def test_the_proportional_categories_are_not_monospaced():
 def test_the_emphasis_and_body_categories_are_different_files():
     # if these collapsed to one fallback, emphasis would be invisible
     assert resolve_font_path("didone") != resolve_font_path("mono")
+
+
+# --- bundled, not borrowed ----------------------------------------------------
+# The first registry pointed at macOS system fonts. Those cannot ship: they are
+# not ours to embed, and a Linux worker does not have them. Every face is now a
+# file in the repo under a licence that permits embedding.
+
+
+def test_every_category_resolves_inside_the_repo():
+    from halfheaven.render.fonts import ASSET_DIR
+
+    for category in CATEGORIES:
+        path = resolve_font_path(category)
+        assert ASSET_DIR in path.parents, f"{category} resolves outside the bundle: {path}"
+
+
+def test_the_bundle_carries_its_licences():
+    from halfheaven.render.fonts import ASSET_DIR
+
+    licences = list(ASSET_DIR.glob("*OFL*")) + list(ASSET_DIR.glob("*LICEN*"))
+    assert licences, "fonts shipped without their licence text"
+
+
+def test_a_variable_face_can_be_set_heavy():
+    # Montserrat ships as one variable file whose default weight is 400, which
+    # reads as weak at caption size; captions want 700-900.
+    light = load_font("grotesque", 96, 400).getlength("HELLO")
+    heavy = load_font("grotesque", 96, 900).getlength("HELLO")
+    assert heavy > light, "weight axis had no effect"
+
+
+def test_asking_for_a_weight_a_face_lacks_still_returns_a_font():
+    assert load_font("display", 48, 900).size == 48   # Anton is single-weight

@@ -61,6 +61,10 @@ def build_segment_command(
         f"scale={width}:{height}:force_original_aspect_ratio=increase",
         f"crop={width}:{height}",
     ]
+    if clip.crop_x != 0.5:
+        # shift the visible window before zooming, so an off-centre framing
+        # reads as a different camera position rather than a lens change
+        filters.append(f"crop=iw:ih:(iw-ow)*{clip.crop_x:.3f}:0")
     if clip.scale_to and clip.scale_to > 1.0:
         zoom = _zoom_expression(clip.scale_to)
         # Dimensions rounded to even numbers; yuv420p cannot encode odd ones.

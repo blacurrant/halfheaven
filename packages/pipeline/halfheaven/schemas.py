@@ -34,6 +34,9 @@ class VideoClip(BaseModel):
     scale_to: float | None = Field(
         default=None, ge=1.0, description="punch-in target scale; >=1, None means no move"
     )
+    # Where the crop sits horizontally, 0 left to 1 right. Reframing off-centre
+    # is what turns one locked-off camera into something with shot variety.
+    crop_x: float = Field(default=0.5, ge=0.0, le=1.0)
     ease: Literal["linear", "outCubic", "inOutCubic"] = "outCubic"
 
     @property
@@ -178,24 +181,63 @@ class TrimProfile(BaseModel):
 
 class PunchProfile(BaseModel):
     rate: float = Field(default=0.0, ge=0.0, le=1.0, description="fraction of cuts with a punch-in")
+    # How much the framing changes between segments. A single-camera talking
+    # head has no cuts to inherit, so the reframe has to supply the rhythm.
+    variety: float = Field(default=0.7, ge=0.0, le=1.0)
     scale_mean: float = Field(default=1.15, ge=1.0)
     ease: Literal["linear", "outCubic", "inOutCubic"] = "outCubic"
 
 
 class CaptionProfile(BaseModel):
+    """How captions look, as independent axes rather than named styles.
+
+    Every look creators name is a combination of these: Hormozi is
+    phrase + karaoke + pop + colour-active + heavy stroke in a black grotesque;
+    MrBeast is single + instant + hard shadow; a documentary caption is
+    phrase + append + no enter + thin stroke in mono. Building the axes rather
+    than the looks means a new style is a few fields, not a new renderer.
+    """
+
     present: bool = False
     # A type category, not a typeface: identifying a specific font from pixels
-    # is unreliable, so we match character using fonts we may embed.
+    # is unreliable, so we match character using faces we may embed.
     font_category: str = "grotesque"
-    mode: Literal["none", "word_by_word", "phrase", "static_title"] = "none"
+    font_weight: int = 800
+
+    # how many words share a card
+    grouping: Literal["single", "phrase", "rolling"] = "phrase"
+    max_words: int = Field(default=3, ge=1)
+
+    # how the words of a card arrive
+    reveal: Literal["instant", "append", "karaoke"] = "append"
+
+    # how each word enters
+    enter: Literal["none", "pop", "slide", "fade"] = "pop"
+    pop_from: float = Field(default=0.82, gt=0, le=1)
+    enter_ms: int = Field(default=110, ge=0)
+
+    # how the word being spoken is marked
+    active: Literal["none", "colour", "scale", "marker"] = "none"
+    active_fill_hex: str = "#FFE94A"
+    active_scale: float = Field(default=1.18, ge=1.0, le=2.0)
+    active_box_hex: str = "#22C55E"
+
+    # how the text sits on the footage
+    decor: Literal["stroke", "shadow_soft", "shadow_hard", "box", "pill", "none"] = "stroke"
+    stroke_hex: str = "#000000"
+    stroke_heavy: bool = True
+    shadow_hex: str = "#000000"
+    shadow_offset_pct: float = Field(default=0.07, ge=0, le=0.4)
+    box_hex: str = "#000000"
+    box_alpha: float = Field(default=0.6, ge=0, le=1)
+    box_radius_pct: float = Field(default=0.22, ge=0, le=0.5)
+
+    layout: Literal["flow", "stack"] = "flow"
+
     anchor: tuple[float, float] = (0.5, 0.72)
     size_pct: float = Field(default=0.06, gt=0, description="cap height as fraction of frame height")
     fill_hex: str = "#FFFFFF"
-    stroke_hex: str = "#000000"
-    stroke_heavy: bool = True
     all_caps: bool = False
-    max_words: int = Field(default=3, ge=1)
-    anim: Literal["none", "pop", "fade", "slide"] = "pop"
 
 
 class SfxProfile(BaseModel):

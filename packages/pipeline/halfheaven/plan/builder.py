@@ -49,6 +49,35 @@ class Decisions:
     music_src: str | None = None
 
 
+# Framings cycled through, tightest last. Reframing rather than repeating is
+# what stops a one-camera take reading as a single held shot.
+FRAMINGS: tuple[tuple[float, float], ...] = (
+    (1.0, 0.50),    # wide, centred
+    (1.16, 0.44),   # medium, drifted left
+    (1.08, 0.56),   # slightly in, drifted right
+    (1.28, 0.50),   # close, centred
+)
+
+
+def _framing(index: int, total: int, is_punched: bool, profile: StyleProfile) -> dict[str, float]:
+    """Scale and crop centre for one segment.
+
+    Deterministic: the same edit reframes the same way every render, so a
+    creator who asks for one change does not get a different cut everywhere
+    else. A stressed word always takes the tightest framing available.
+    """
+    if is_punched:
+        scale, centre = max(FRAMINGS, key=lambda f: f[0])
+        return {"scale_to": max(scale, profile.punch.scale_mean), "crop_x": centre}
+    if profile.punch.variety <= 0 or total < 2:
+        return {"scale_to": None, "crop_x": 0.5}
+    scale, centre = FRAMINGS[index % len(FRAMINGS)]
+    # variety eases every framing back toward wide and centred
+    eased = 1.0 + (scale - 1.0) * profile.punch.variety
+    drift = 0.5 + (centre - 0.5) * profile.punch.variety
+    return {"scale_to": eased if eased > 1.0 else None, "crop_x": drift}
+
+
 def _is_cut(index: int, cuts: list[tuple[int, int]]) -> bool:
     return any(start <= index < stop for start, stop in cuts)
 
@@ -85,13 +114,8 @@ def build_program(
                 break
 
     video = [
-        VideoClip(
-            src=source,
-            start=start,
-            end=end,
-            scale_to=profile.punch.scale_mean if index in punched else None,
-            ease=profile.punch.ease,
-        )
+        VideoClip(src=source, start=start, end=end, ease=profile.punch.ease,
+                  **_framing(index, len(spans), index in punched, profile))
         for index, (start, end) in enumerate(spans)
     ]
 
@@ -130,7 +154,6 @@ def build_program(
                 duration=end - runs[0].t,
                 runs=runs,
                 anchor=profile.captions.anchor,
-                anim=profile.captions.anim,
                 emphasis=chunk.emphasis,
             )
         )

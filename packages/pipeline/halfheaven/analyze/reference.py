@@ -133,9 +133,10 @@ def build_style_profile(
                 update={
                     "all_caps": bool(style.get("all_caps", False)),
                     "max_words": max(1, int(style.get("words_per_card", 4))),
-                    "mode": style.get("mode", "phrase"),
-                    "anim": style.get("anim", "pop"),
+                    "grouping": "single" if style.get("mode") == "word_by_word" else "phrase",
+                    "enter": style.get("anim") if style.get("anim") in ("none", "pop", "slide", "fade") else "pop",
                     "stroke_heavy": bool(style.get("stroke_heavy", True)),
+                    "decor": "stroke",
                     "font_category": body_category,
                 }
             )

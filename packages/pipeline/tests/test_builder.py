@@ -69,17 +69,21 @@ def test_caption_whose_words_were_all_cut_is_dropped():
     assert program.captions == []
 
 
-def test_caption_uses_the_profile_anchor_and_animation():
-    profile = StyleProfile(captions=CaptionProfile(present=True, anchor=(0.5, 0.80), anim="fade"))
+def test_caption_uses_the_profile_anchor():
+    # animation moved onto the profile's own axes, so a caption carries only
+    # where it sits; how it enters is the style's business
+    profile = StyleProfile(captions=CaptionProfile(present=True, anchor=(0.5, 0.80)))
     program = build(profile=profile, caption_chunks=[CaptionChunk(word_indices=[0])])
     assert program.captions[0].anchor == (0.5, 0.80)
-    assert program.captions[0].anim == "fade"
 
 
-def test_punch_in_scales_the_clip_that_contains_the_word():
-    profile = StyleProfile(punch=PunchProfile(rate=1.0, scale_mean=1.18))
+def test_punch_in_tightens_the_clip_that_contains_the_word():
+    # a stressed word takes the tightest framing available, which is at least
+    # the profile's punch scale and may be tighter
+    profile = StyleProfile(punch=PunchProfile(rate=1.0, scale_mean=1.18, variety=0.0))
     program = build(profile=profile, cuts=[(4, 5)], punch_word_indices=[9])
-    assert program.video[1].scale_to == pytest.approx(1.18)
+    assert program.video[1].scale_to >= 1.18
+    assert program.video[1].scale_to == max(c.scale_to or 1.0 for c in program.video)
     assert program.video[0].scale_to is None
 
 
