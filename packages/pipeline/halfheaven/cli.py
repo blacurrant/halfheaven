@@ -33,6 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target", required=True, help="the footage to apply that style to")
     parser.add_argument("--out", default="out.mp4")
     parser.add_argument("--work", default="work")
+    parser.add_argument("--music", default="", help="a bed to mix under the speech")
     parser.add_argument("--overrides", default="",
                         help="JSON patch over the measured style profile")
     args = parser.parse_args(argv)
@@ -76,8 +77,12 @@ def main(argv: list[str] | None = None) -> int:
 
     print("[3/5] editorial pass")
     decisions = decide(client, transcript, profile)
+    if args.music:
+        profile = profile.model_copy(update={
+            "music": profile.music.model_copy(update={"present": True})})
     decisions = dataclasses.replace(
         decisions,
+        music_src=args.music or None,
         caption_chunks=chunk_captions(
             transcript.words,
             cuts=decisions.cuts,

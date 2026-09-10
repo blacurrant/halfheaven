@@ -17,6 +17,7 @@ peak memory is bounded by a single clip no matter how long the edit is.
 """
 from __future__ import annotations
 
+import os
 import pathlib
 import subprocess
 
@@ -96,6 +97,7 @@ def build_finish_command(
     base_path: str | pathlib.Path,
     out_path: str | pathlib.Path,
     work_dir: str | pathlib.Path,
+    has_speech: bool | None = None,
 ) -> list[str]:
     """Grade, letterbox and captions in one pass over the joined video."""
     canvas = program.canvas
@@ -151,12 +153,53 @@ def build_finish_command(
         steps.append(f"{label}{caption_stream}overlay=0:0:eof_action=pass[vc]")
         label = "[vc]"
 
+    # A music bed is compressed against the speech itself, so it drops when
+    # someone talks and returns in the gaps. That is what makes a bed sound
+    # deliberate rather than merely loud.
+    audio_map = ["-map", "0:a?", "-c:a", "copy"]
+    music = program.music
+    if has_speech is None:
+        # Probe when we can; assume there is speech when the base has not been
+        # rendered yet, which is the case when only the command is being built.
+        has_speech = probe(base_path).has_audio if os.path.exists(base_path) else True
+
+    if music and os.path.exists(music.src):
+        inputs += ["-stream_loop", "-1", "-i", str(music.src)]
+        bed = f"[{input_count}:a]"
+        input_count += 1
+        steps.append(
+            f"{bed}volume={music.gain_db:.1f}dB,"
+            f"aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[bed]"
+        )
+        if has_speech:
+            steps.append("[0:a]aformat=sample_fmts=fltp:sample_rates=48000:"
+                         "channel_layouts=stereo,asplit=2[sp][key]")
+            steps.append(
+                f"[bed][key]sidechaincompress=threshold=0.02:ratio=8:"
+                f"attack={max(1, int(music.duck_attack * 1000))}:"
+                f"release={max(1, int(music.duck_release * 1000))}[ducked]"
+            )
+            # normalize=0 matters: amix divides by the number of inputs by
+            # default, so adding a bed would quietly halve the speech and make
+            # every video with music sound flatter than one without.
+            steps.append("[sp][ducked]amix=inputs=2:duration=first:"
+                         "dropout_transition=0:normalize=0,alimiter=limit=0.97[aout]")
+        else:
+            # Nothing to duck against, so the bed is simply the soundtrack.
+            steps.append("[bed]alimiter=limit=0.97[aout]")
+        audio_map = ["-map", "[aout]", "-c:a", "aac", "-b:a", "192k", "-shortest"]
+
     command = [ffmpeg(), "-v", "error", "-y", *inputs]
     if steps:
-        command += ["-filter_complex", ";".join(steps), "-map", label]
+        # "[0:v]" is a stream specifier, not a filter label. Once a filtergraph
+        # exists, mapping it in brackets is read as a label that was never
+        # produced - which happens whenever music adds filters and the video
+        # has none of its own.
+        command += ["-filter_complex", ";".join(steps),
+                    "-map", "0:v" if label == "[0:v]" else label]
     else:
         command += ["-map", "0:v"]
-    command += ["-map", "0:a?", "-c:a", "copy",
+    command += [*audio_map,
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", str(OUTPUT_CRF),
                 "-pix_fmt", "yuv420p", str(out_path)]
     return command
@@ -209,5 +252,5 @@ def render(
         "concat",
     )
 
-    _run(build_finish_command(program, base, out_path, work_dir), "finish")
+    _run(build_finish_command(program, base, out_path, work_dir, with_audio), "finish")
     return out_path

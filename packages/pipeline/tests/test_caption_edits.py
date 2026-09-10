@@ -139,3 +139,67 @@ def test_deletes_do_not_shift_the_indices_of_other_edits():
 def test_the_result_is_still_a_valid_program():
     out = apply_caption_edits(program(), [CaptionEdit(index=0, text="one two three")])
     EditProgram.model_validate(out.model_dump())
+
+
+# --- regrouping ---------------------------------------------------------------
+# A look decides how many words share a card. Switching to a single-word style
+# has to re-split the cards we already have, or the preset renders six words at
+# once and looks nothing like itself.
+
+from halfheaven.plan.edits import regroup_captions  # noqa: E402
+
+
+def long_program() -> EditProgram:
+    words = ["one", "two", "three", "four", "five", "six", "seven", "eight"]
+    return EditProgram(
+        canvas=CANVAS,
+        video=[VideoClip(src="a.mp4", start=0.0, end=12.0)],
+        captions=[
+            Caption(t=0.0, duration=2.0, runs=[
+                TextRun(text=w, t=round(i * 0.5, 2)) for i, w in enumerate(words[:4])]),
+            Caption(t=2.0, duration=2.0, runs=[
+                TextRun(text=w, t=round(2.0 + i * 0.5, 2)) for i, w in enumerate(words[4:])]),
+        ],
+    )
+
+
+def test_regrouping_to_one_word_makes_a_card_per_word():
+    out = regroup_captions(long_program(), max_words=1)
+    assert len(out.captions) == 8
+    assert all(len(c.runs) == 1 for c in out.captions)
+
+
+def test_regrouping_keeps_every_word_and_its_order():
+    out = regroup_captions(long_program(), max_words=3)
+    assert [r.text for c in out.captions for r in c.runs] == \
+        ["one", "two", "three", "four", "five", "six", "seven", "eight"]
+
+
+def test_regrouped_cards_keep_the_word_timings():
+    out = regroup_captions(long_program(), max_words=1)
+    assert [c.runs[0].t for c in out.captions] == [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5]
+
+
+def test_cards_do_not_overlap_after_regrouping():
+    out = regroup_captions(long_program(), max_words=3)
+    ends = [c.t + c.duration for c in out.captions]
+    assert all(e <= n + 1e-6 for e, n in zip(ends, [c.t for c in out.captions[1:]]))
+
+
+def test_regrouping_preserves_emphasis_on_the_right_word():
+    prog = long_program()
+    prog.captions[1].runs[1].style = "emphasis"      # "six"
+    out = regroup_captions(prog, max_words=2)
+    marked = [r.text for c in out.captions for r in c.runs if r.style == "emphasis"]
+    assert marked == ["six"]
+
+
+def test_regrouping_to_the_same_size_is_harmless():
+    out = regroup_captions(long_program(), max_words=4)
+    assert len(out.captions) == 2
+
+
+def test_the_last_card_still_ends_within_the_program():
+    out = regroup_captions(long_program(), max_words=1)
+    last = out.captions[-1]
+    assert last.t + last.duration <= out.duration + 1e-6

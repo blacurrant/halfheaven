@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from halfheaven.schemas import CaptionProfile
+from halfheaven.schemas import CaptionProfile, StyleProfile
 
 CAPTION_PRESETS: dict[str, dict[str, Any]] = {
     # The dominant short-form look: chunky caps, the spoken word lit up.
@@ -98,3 +98,42 @@ def catalogue() -> list[dict[str, str]]:
         {"id": key, "label": str(value["label"]), "blurb": str(value["blurb"])}
         for key, value in CAPTION_PRESETS.items()
     ]
+
+
+# What the reference decided and a look should not overrule: these are what
+# make the output resemble the video the creator pointed at.
+MEASURED_FIELDS = ("fill_hex", "anchor")
+# The emphasis face must stay distinct from the body, or stressed words vanish
+# into the line.
+EMPHASIS_PAIRS = {
+    "grotesque": "didone", "neutral": "didone", "geometric": "display",
+    "mono": "didone", "didone": "display", "slab": "display",
+    "rounded": "display", "display": "condensed", "condensed": "display",
+    "handwritten": "display",
+}
+
+
+def apply_preset(profile: StyleProfile, name: str) -> StyleProfile:
+    """A copy of `profile` wearing a named look.
+
+    The preset decides structure; the reference keeps its colour and position,
+    so choosing a look does not undo the measurement that made the edit
+    resemble its source.
+    """
+    look = preset(name)
+    keep = {
+        field: getattr(profile.captions, field)
+        for field in MEASURED_FIELDS
+        if profile.captions.present
+    }
+    captions = look.model_copy(update=keep)
+
+    emphasis_face = EMPHASIS_PAIRS.get(captions.font_category, "didone")
+    emphasis = profile.emphasis.model_copy(update={
+        "font_category": emphasis_face,
+        "fill_hex": captions.fill_hex,
+        "anchor": captions.anchor,
+        "all_caps": True,
+        "size_pct": round(captions.size_pct * 2.4, 4),
+    })
+    return profile.model_copy(update={"captions": captions, "emphasis": emphasis})

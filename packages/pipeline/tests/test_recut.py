@@ -57,3 +57,44 @@ def test_deleting_the_only_card_still_renders(tmp_path):
     main(["--program", str(path), "--out", str(out), "--work", str(tmp_path / "w"),
           "--edits", json.dumps([{"index": 0, "delete": True}])])
     assert probe(out).duration == pytest.approx(2.0, abs=0.2)
+
+
+def test_switching_the_look_regroups_and_renders(tmp_path):
+    from halfheaven.schemas import StyleProfile
+    path = written_program(tmp_path)
+    (tmp_path / "style_profile.json").write_text(StyleProfile().model_dump_json())
+    out = tmp_path / "out.mp4"
+    assert main(["--program", str(path), "--out", str(out), "--work", str(tmp_path / "w"),
+                 "--preset", "beast"]) == 0
+    saved = json.loads(path.read_text())
+    # "big and loud" puts one word on a card
+    assert all(len(c["runs"]) == 1 for c in saved["captions"])
+    assert saved["styles"]["default"]["font_category"] == "display"
+
+
+def test_switching_the_look_keeps_the_words(tmp_path):
+    from halfheaven.schemas import StyleProfile
+    path = written_program(tmp_path)
+    (tmp_path / "style_profile.json").write_text(StyleProfile().model_dump_json())
+    main(["--program", str(path), "--out", str(tmp_path / "o.mp4"), "--work", str(tmp_path / "w"),
+          "--preset", "sticker"])
+    saved = json.loads(path.read_text())
+    assert [r["text"] for c in saved["captions"] for r in c["runs"]] == ["I", "phone"]
+
+
+def test_music_can_be_added_to_a_finished_edit(tmp_path):
+    path = written_program(tmp_path)
+    bed = FIXTURES / "music_bed.m4a"
+    main(["--program", str(path), "--out", str(tmp_path / "o.mp4"),
+          "--work", str(tmp_path / "w"), "--music", str(bed)])
+    assert json.loads(path.read_text())["music"]["src"] == str(bed)
+
+
+def test_music_can_be_taken_away_again(tmp_path):
+    path = written_program(tmp_path)
+    bed = FIXTURES / "music_bed.m4a"
+    main(["--program", str(path), "--out", str(tmp_path / "o.mp4"),
+          "--work", str(tmp_path / "w"), "--music", str(bed)])
+    main(["--program", str(path), "--out", str(tmp_path / "o.mp4"),
+          "--work", str(tmp_path / "w"), "--no-music"])
+    assert json.loads(path.read_text())["music"] is None

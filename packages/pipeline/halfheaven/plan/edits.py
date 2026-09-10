@@ -83,3 +83,37 @@ def apply_caption_edits(program: EditProgram, edits: list[CaptionEdit]) -> EditP
         captions.append(card)
 
     return program.model_copy(update={"captions": captions})
+
+
+# A card that outlives its last word by more than this looks stuck on screen.
+TAIL_HOLD = 0.45
+
+
+def regroup_captions(program: EditProgram, max_words: int) -> EditProgram:
+    """Re-split the existing cards into groups of `max_words`.
+
+    A look decides how many words share a card, so switching to a single-word
+    style has to re-split what we already have - otherwise the preset renders
+    six words at once and looks nothing like itself. The words and their
+    timings are untouched; only the grouping changes, which is why this needs
+    no transcript and no model.
+    """
+    runs = [run for card in sorted(program.captions, key=lambda c: c.t) for run in card.runs]
+    if not runs or max_words < 1:
+        return program
+
+    groups = [runs[i : i + max_words] for i in range(0, len(runs), max_words)]
+    last_end = max((c.t + c.duration for c in program.captions), default=program.duration)
+
+    captions: list[Caption] = []
+    for index, group in enumerate(groups):
+        start = group[0].t if group[0].t is not None else 0.0
+        following = groups[index + 1][0].t if index + 1 < len(groups) else None
+        end = following if following is not None else min(last_end, program.duration)
+        # a trailing card holds briefly rather than until the video ends
+        if following is None:
+            end = min(end, start + TAIL_HOLD + 0.5 * len(group))
+        duration = max(0.08, min(end, program.duration) - start)
+        captions.append(Caption(t=start, duration=duration, runs=list(group)))
+
+    return program.model_copy(update={"captions": captions})

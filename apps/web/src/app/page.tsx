@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import CaptionFixer from "@/components/CaptionFixer";
+import Timeline from "@/components/Timeline";
 import { capPlace, capSize, faceFamily, mood, pace, silence } from "@/lib/plain";
 
 type Style = { id: string; name: string; file: string; hint: string };
@@ -61,6 +62,24 @@ export default function Studio() {
   const [overrides, setOverrides] = useState<Record<string, unknown>>({});
   const [tab, setTab] = useState<"chat" | "fix">("chat");
   const [videoKey, setVideoKey] = useState(0);
+  const [editMode, setEditMode] = useState(false);   // creators who only want captions never meet a timeline
+  const [playhead, setPlayhead] = useState(0);
+  const [looks, setLooks] = useState<{ id: string; label: string; blurb: string }[]>([]);
+  const [look, setLook] = useState("");
+  const [styling, setStyling] = useState(false);
+  const [track, setTrack] = useState<string>("");
+  const [mixing, setMixing] = useState(false);
+  const musicInput = useRef<HTMLInputElement>(null);
+
+  const setMusic = async (file: File | null) => {
+    setMixing(true);
+    try {
+      const fd = new FormData();
+      if (file) fd.set("track", file); else fd.set("remove", "1");
+      const r = await fetch(`/api/jobs/${job?.id ?? "demo"}/music`, { method: "POST", body: fd });
+      if ((await r.json()).ok) { setTrack(file ? file.name : ""); setVideoKey(k => k + 1); }
+    } finally { setMixing(false); }
+  };
 
   const fileInput = useRef<HTMLInputElement>(null);
   const screenRef = useRef<HTMLDivElement>(null);
@@ -70,6 +89,18 @@ export default function Studio() {
 
   useEffect(() => { fetch("/api/demo").then(r => r.json()).then(d => d.job && setJob(d.job)); }, []);
   useEffect(() => { fetch("/api/styles").then(r => r.json()).then(d => setStyles(d.styles)); }, []);
+  useEffect(() => { fetch("/api/looks").then(r => r.json()).then(d => setLooks(d.looks ?? [])); }, []);
+
+  const chooseLook = async (id: string) => {
+    setLook(id); setStyling(true);
+    try {
+      await fetch(`/api/jobs/${job?.id ?? "demo"}/look`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ preset: id }),
+      });
+      setVideoKey(k => k + 1);
+    } finally { setStyling(false); }
+  };
   useEffect(() => { logRef.current?.scrollTo({ top: 1e6, behavior: "smooth" }); }, [msgs, thinking]);
 
   useEffect(() => {
@@ -160,6 +191,11 @@ export default function Studio() {
           </span>
         )}
         {done && (
+          <button className="btn sm" aria-pressed={editMode} onClick={() => setEditMode(v => !v)}>
+            {editMode ? "Hide timeline" : "Edit mode"}
+          </button>
+        )}
+        {done && (
           <a className="btn sm" href={`/api/jobs/${job!.id}/media?v=after`} download={`edit-${job!.id}.mp4`}>
             Save video
           </a>
@@ -215,6 +251,42 @@ export default function Studio() {
               })}
             </div>
           </div>
+
+          <div className="block">
+            <span className="eyebrow">Music{mixing ? " — mixing…" : ""}</span>
+            <input ref={musicInput} type="file" accept="audio/*" hidden
+              onChange={e => setMusic(e.target.files?.[0] ?? null)} />
+            {track ? (
+              <div className="loaded">
+                <span className="thumb">♪</span>
+                <span style={{ flex: 1 }}>
+                  <span className="nm" style={{ display: "block" }}>{track}</span>
+                  <span className="tiny">Ducks under your voice</span>
+                </span>
+                <button className="btn ghost sm" disabled={mixing}
+                  onClick={() => setMusic(null)}>Remove</button>
+              </div>
+            ) : (
+              <button className="drop" style={{ padding: "13px 12px" }}
+                disabled={mixing || !done} onClick={() => musicInput.current?.click()}>
+                <span className="big">Add a track</span>
+                <span className="sub">It'll duck under your voice automatically</span>
+              </button>
+            )}
+          </div>
+
+          <div className="block">
+            <span className="eyebrow">Caption style{styling ? " — applying…" : ""}</span>
+            <div className="looks-grid">
+              {looks.map(l => (
+                <button key={l.id} className="lk" aria-pressed={look === l.id}
+                  disabled={styling || !done} onClick={() => chooseLook(l.id)}>
+                  <span className="n">{l.label}</span>
+                  <span className="b">{l.blurb}</span>
+                </button>
+              ))}
+            </div>
+          </div>
         </aside>
 
         {/* ---------------- middle: the video ---------------- */}
@@ -225,7 +297,8 @@ export default function Studio() {
                 <>
                   <video ref={beforeRef} src={`/api/jobs/${job!.id}/media?v=before`} muted loop playsInline autoPlay />
                   <video ref={afterRef} className="after" src={`/api/jobs/${job!.id}/media?v=after&r=${videoKey}`}
-                    muted loop playsInline autoPlay onTimeUpdate={sync} />
+                    muted loop playsInline autoPlay
+                    onTimeUpdate={e => { sync(); setPlayhead((e.target as HTMLVideoElement).currentTime); }} />
                   <span className="seam" /><span className="grip">↔</span>
                   <span className="handle" onPointerDown={drag} onPointerMove={drag} />
                   <span className="tag l">Yours</span>
@@ -248,6 +321,14 @@ export default function Studio() {
               )}
             </div>
           </div>
+
+          {editMode && done && (
+            <Timeline jobId={job!.id} at={playhead} version={videoKey}
+              onSeek={t => {
+                if (afterRef.current) afterRef.current.currentTime = t;
+                setPlayhead(t);
+              }} />
+          )}
 
           <div className="strip">
             {done && r ? (

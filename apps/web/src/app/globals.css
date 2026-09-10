@@ -240,3 +240,32 @@ h1,h2,h3{margin:0;font-family:var(--font-display),var(--font-ui),sans-serif;lett
 .fix-foot{border-top:1px solid var(--line);padding:10px 12px;display:flex;align-items:center;gap:10px}
 .fix-foot .btn{margin-left:auto}
 .fix-empty{padding:22px 16px;color:var(--muted);font-size:13.5px;text-align:center}
+
+/* ---------- timeline ---------- */
+.tl{border-top:1px solid var(--line);background:var(--card);padding:10px 16px 14px;
+  display:flex;flex-direction:column;gap:8px}
+.tl .tl-head{display:flex;align-items:center;gap:12px}
+.tl-legend{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--faint)}
+.tl-legend i{width:9px;height:9px;border-radius:2px;display:inline-block;margin-left:8px}
+.k-shot{background:var(--line-2)}.k-punch{background:var(--accent)}.k-cap{background:var(--gold)}
+.tl-strip{position:relative;cursor:pointer;touch-action:none;user-select:none;
+  border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--theatre)}
+.frames{height:46px;background-repeat:no-repeat;background-size:auto 100%;
+  image-rendering:auto;opacity:.85}
+.lane{position:relative;height:9px;margin:3px 0}
+.lane .shot{position:absolute;top:0;height:100%;border-radius:2px;background:var(--line-2);
+  border-right:1px solid var(--theatre)}
+.lane .shot.punched{background:var(--accent);opacity:.9}
+.lane .cap{position:absolute;top:2px;height:5px;border-radius:3px;background:var(--gold);opacity:.55}
+.lane .cap.stressed{opacity:1;height:9px;top:0}
+.tl-strip .head{position:absolute;top:0;bottom:0;width:2px;background:#fff;
+  box-shadow:0 0 6px rgba(0,0,0,.7);pointer-events:none}
+
+/* ---------- look picker ---------- */
+.looks-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.lk{border:1.5px solid var(--line);border-radius:8px;padding:8px 9px;text-align:left;
+  background:var(--card);transition:border-color .14s,background .14s}
+.lk:hover{border-color:var(--line-2);background:var(--sunk)}
+.lk[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft)}
+.lk .n{font-weight:650;font-size:12.5px;display:block}
+.lk .b{font-size:11px;color:var(--muted);line-height:1.3;display:block;margin-top:2px}
