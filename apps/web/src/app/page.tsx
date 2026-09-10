@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import CaptionFixer from "@/components/CaptionFixer";
 import { capPlace, capSize, faceFamily, mood, pace, silence } from "@/lib/plain";
 
 type Style = { id: string; name: string; file: string; hint: string };
@@ -58,6 +59,8 @@ export default function Studio() {
   const [draft, setDraft] = useState("");
   const [thinking, setThinking] = useState(false);
   const [overrides, setOverrides] = useState<Record<string, unknown>>({});
+  const [tab, setTab] = useState<"chat" | "fix">("chat");
+  const [videoKey, setVideoKey] = useState(0);
 
   const fileInput = useRef<HTMLInputElement>(null);
   const screenRef = useRef<HTMLDivElement>(null);
@@ -221,7 +224,7 @@ export default function Studio() {
               {done ? (
                 <>
                   <video ref={beforeRef} src={`/api/jobs/${job!.id}/media?v=before`} muted loop playsInline autoPlay />
-                  <video ref={afterRef} className="after" src={`/api/jobs/${job!.id}/media?v=after`}
+                  <video ref={afterRef} className="after" src={`/api/jobs/${job!.id}/media?v=after&r=${videoKey}`}
                     muted loop playsInline autoPlay onTimeUpdate={sync} />
                   <span className="seam" /><span className="grip">↔</span>
                   <span className="handle" onPointerDown={drag} onPointerMove={drag} />
@@ -265,10 +268,18 @@ export default function Studio() {
 
         {/* ---------------- right: chat ---------------- */}
         <aside className="chat">
-          <div className="chat-head">
-            <h2 style={{ fontSize: 16 }}>Tell me what to change</h2>
-            <span className="tiny">Plain words. I'll redo the edit each time.</span>
+          <div className="tabs" role="tablist">
+            <button className="tab" role="tab" aria-selected={tab === "chat"}
+              onClick={() => setTab("chat")}>Tell me what to change</button>
+            <button className="tab" role="tab" aria-selected={tab === "fix"}
+              onClick={() => setTab("fix")}>Fix captions</button>
           </div>
+
+          {tab === "fix" ? (
+            <CaptionFixer jobId={job?.id ?? "demo"} ready={!!done}
+              onApplied={() => setVideoKey(k => k + 1)} />
+          ) : (
+          <>
 
           <div className="chat-log" ref={logRef}>
             {p && (
@@ -330,6 +341,8 @@ export default function Studio() {
               <button className="send" onClick={() => say(draft)} disabled={!draft.trim() || thinking}>↑</button>
             </div>
           </div>
+          </>
+          )}
         </aside>
       </div>
     </div>

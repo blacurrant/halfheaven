@@ -134,3 +134,35 @@ def test_stacked_words_make_a_taller_narrower_block(tmp_path):
     fw, fh = bounds(frame(tmp_path, base(layout="flow"), "f.png", visible=3))
     sw, sh = bounds(frame(tmp_path, base(layout="stack"), "s.png", visible=3))
     assert sh > fh and sw < fw
+
+
+# --- per-word styles ----------------------------------------------------------
+# The caption rewrite made render_frame take one profile for a whole card,
+# which silently dropped per-run style lookup: a card mixing a mono body with a
+# Didone punch rendered entirely in mono. The old test missed it because it used
+# a card with a single run, where runs[0]'s style is the card's style anyway.
+
+MIXED_STYLES = {
+    "default": CaptionProfile(present=True, size_pct=0.05, font_category="mono",
+                              fill_hex="#FFFFFF", enter="none"),
+    "emphasis": CaptionProfile(present=True, size_pct=0.13, font_category="didone",
+                               fill_hex="#FFE94A", enter="none"),
+}
+
+
+def test_a_run_is_drawn_in_its_own_style_not_the_card_s(tmp_path):
+    from halfheaven.render.captions import render_card
+
+    mixed = [TextRun(text="money"), TextRun(text="SALT", style="emphasis")]
+    plain = [TextRun(text="money"), TextRun(text="SALT")]
+    a = ink(render_card(CaptionFrame(runs=mixed, duration=0.3), CANVAS, MIXED_STYLES, tmp_path / "m.png"))
+    b = ink(render_card(CaptionFrame(runs=plain, duration=0.3), CANVAS, MIXED_STYLES, tmp_path / "p.png"))
+    assert a > b * 1.5, "the emphasis run rendered at body size"
+
+
+def test_an_emphasised_run_uses_its_own_colour(tmp_path):
+    from halfheaven.render.captions import render_card
+
+    mixed = [TextRun(text="money"), TextRun(text="SALT", style="emphasis")]
+    path = render_card(CaptionFrame(runs=mixed, duration=0.3), CANVAS, MIXED_STYLES, tmp_path / "m.png")
+    assert has_colour(path, (255, 233, 74)) and has_colour(path, (255, 255, 255))

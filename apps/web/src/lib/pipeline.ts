@@ -52,6 +52,38 @@ export const getJob = (id: string) => jobs.get(id);
 export const listJobs = () => [...jobs.values()].sort((a, b) => b.startedAt - a.startedAt);
 export const workDir = (id: string) => path.join(WORKROOT, id);
 
+/** Where a job's document and output live. The seeded demo points at the
+ *  repo's own last render so the studio opens on something real. */
+export function jobPaths(id: string) {
+  if (id === "demo") {
+    return { program: path.join(REPO, "work", "edit_program.json"),
+             out: path.join(REPO, "styled.mp4"),
+             work: path.join(REPO, "work") };
+  }
+  const dir = workDir(id);
+  return { program: path.join(dir, "edit_program.json"),
+           out: path.join(dir, "out.mp4"), work: dir };
+}
+
+/** Re-render after a caption fix. Deliberately not the pipeline:
+ *  re-transcribing would discard the correction that prompted it. */
+export function recut(id: string, edits: unknown[]): Promise<void> {
+  const { program, out, work } = jobPaths(id);
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      PYTHON,
+      ["-u", "-m", "halfheaven.recut", "--program", program,
+       "--out", out, "--work", work, "--edits", JSON.stringify(edits)],
+      { cwd: REPO, env: { ...process.env, PYTHONUNBUFFERED: "1",
+                          PYTHONPATH: path.join(REPO, "packages", "pipeline") } }
+    );
+    let err = "";
+    child.stderr.on("data", (b) => (err += b.toString()));
+    child.on("close", (code) =>
+      code === 0 ? resolve() : reject(new Error(err.slice(-400) || `recut exited ${code}`)));
+  });
+}
+
 /** Reference videos available as styles. Real files, real cached profiles. */
 export type Style = { id: string; name: string; file: string; hint: string };
 export const STYLES: Style[] = [

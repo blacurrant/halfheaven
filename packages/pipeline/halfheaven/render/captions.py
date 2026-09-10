@@ -40,14 +40,15 @@ def _ease_out(t: float) -> float:
 
 
 class _Token:
-    """One drawable word at the size this frame wants it."""
+    """One drawable word, at the size and in the face its own run asks for."""
 
-    __slots__ = ("text", "font", "size", "width", "height", "is_active")
+    __slots__ = ("text", "font", "size", "width", "height", "is_active", "style")
 
     def __init__(self, text: str, profile: CaptionProfile, canvas: Canvas,
                  factor: float, is_active: bool) -> None:
         self.text = text
         self.is_active = is_active
+        self.style = profile
         base = max(8, int(canvas.height * profile.size_pct))
         self.size = max(6, int(base * factor))
         self.font: ImageFont.FreeTypeFont = load_font(
@@ -55,7 +56,7 @@ class _Token:
         self.width = self.font.getlength(text)
         self.height = self.size
 
-    def fit(self, max_width: float, profile: CaptionProfile) -> None:
+    def fit(self, max_width: float) -> None:
         """A single word cannot wrap, so an oversized one shrinks.
 
         Pillow clips silently at the image edge, which is how a clipped caption
@@ -64,15 +65,19 @@ class _Token:
         if self.width <= max_width or self.width <= 0:
             return
         self.size = max(6, int(self.size * max_width / self.width))
-        self.font = load_font(profile.font_category, self.size, profile.font_weight)
+        self.font = load_font(self.style.font_category, self.size, self.style.font_weight)
         self.width = self.font.getlength(self.text)
         self.height = self.size
 
 
-def _tokens(frame: CaptionFrame, canvas: Canvas, profile: CaptionProfile) -> list[_Token]:
+def _tokens(frame: CaptionFrame, canvas: Canvas, profile: CaptionProfile,
+            styles: dict[str, CaptionProfile] | None = None) -> list[_Token]:
     out: list[_Token] = []
     for index, run in enumerate(frame.shown):
-        text = run.text.upper() if profile.all_caps else run.text
+        # a run names its own style; the card's profile is the fallback, which
+        # is what lets one line carry a mono body and a Didone punch
+        own = (styles or {}).get(run.style) or profile
+        text = run.text.upper() if own.all_caps else run.text
         factor = 1.0
         if frame.entering == index and profile.enter == "pop":
             factor = profile.pop_from + (1 - profile.pop_from) * _ease_out(frame.progress)
@@ -83,7 +88,7 @@ def _tokens(frame: CaptionFrame, canvas: Canvas, profile: CaptionProfile) -> lis
         # very long token.
         for word in text.split() or [""]:
             if word:
-                out.append(_Token(word, profile, canvas, factor, frame.active == index))
+                out.append(_Token(word, own, canvas, factor, frame.active == index))
     return out
 
 
@@ -108,17 +113,18 @@ def _lines(tokens: list[_Token], profile: CaptionProfile, max_width: float,
 
 
 def render_frame(frame: CaptionFrame, canvas: Canvas, profile: CaptionProfile,
-                 out_path: str | pathlib.Path) -> pathlib.Path:
+                 out_path: str | pathlib.Path,
+                 styles: dict[str, CaptionProfile] | None = None) -> pathlib.Path:
     """Draw one caption still, transparent everywhere except the card."""
     out_path = pathlib.Path(out_path)
     image = Image.new("RGBA", (canvas.width, canvas.height), (0, 0, 0, 0))
-    tokens = _tokens(frame, canvas, profile)
+    tokens = _tokens(frame, canvas, profile, styles)
 
     if tokens:
         draw = ImageDraw.Draw(image)
         max_width = canvas.width * (1 - 2 * SIDE_MARGIN_PCT)
         for token in tokens:
-            token.fit(max_width, profile)
+            token.fit(max_width)
         space = max(t.font.getlength(" ") for t in tokens)
         lines = _lines(tokens, profile, max_width, space)
 
@@ -178,27 +184,34 @@ def render_frame(frame: CaptionFrame, canvas: Canvas, profile: CaptionProfile,
             image.alpha_composite(layer)
             draw = ImageDraw.Draw(image)
 
-        stroke = 0
-        if profile.decor == "stroke":
-            ratio = HEAVY_STROKE_RATIO if profile.stroke_heavy else MIN_STROKE_RATIO
-            stroke = max(1, int(tokens[0].size * ratio))
-
         for token, x, baseline in placements:
-            fill = profile.active_fill_hex if (token.is_active and profile.active == "colour") \
-                else profile.fill_hex
+            own = token.style
+            stroke = 0
+            if own.decor == "stroke":
+                ratio = HEAVY_STROKE_RATIO if own.stroke_heavy else MIN_STROKE_RATIO
+                stroke = max(1, int(token.size * ratio))
+            fill = own.active_fill_hex if (token.is_active and own.active == "colour") else own.fill_hex
             draw.text((x, baseline), token.text, font=token.font, fill=(*_rgb(fill), 255),
-                      stroke_width=stroke, stroke_fill=(*_rgb(profile.stroke_hex), 255))
+                      stroke_width=stroke, stroke_fill=(*_rgb(own.stroke_hex), 255))
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     image.save(out_path)
     return out_path
 
 
+def render_card(frame: CaptionFrame, canvas: Canvas, styles: dict[str, CaptionProfile],
+                out_path: str | pathlib.Path) -> pathlib.Path:
+    """One still, with every run drawn in the style it names."""
+    profile = styles.get("default") or _DEFAULT
+    return render_frame(frame, canvas, profile, out_path, styles)
+
+
 def render_caption(runs: list[TextRun], canvas: Canvas, styles: dict[str, CaptionProfile],
                    out_path: str | pathlib.Path) -> pathlib.Path:
-    """A whole card at rest, in the style its first run names."""
+    """A whole card at rest."""
     profile = styles.get(runs[0].style if runs else "default") or _DEFAULT
-    return render_frame(CaptionFrame(runs=list(runs), duration=0.0), canvas, profile, out_path)
+    return render_frame(CaptionFrame(runs=list(runs), duration=0.0), canvas, profile,
+                        out_path, styles)
 
 
 def build_caption_track(program, work_dir: str | pathlib.Path) -> pathlib.Path:
@@ -231,7 +244,7 @@ def build_caption_track(program, work_dir: str | pathlib.Path) -> pathlib.Path:
             continue
         for order, frame in enumerate(frames):
             card = render_frame(frame, canvas, profile,
-                                work_dir / f"cap_{index:04d}_{order:03d}.png")
+                                work_dir / f"cap_{index:04d}_{order:03d}.png", styles)
             spans.append((card, frame.duration))
         cursor = min(program.duration, start + caption.duration)
 
