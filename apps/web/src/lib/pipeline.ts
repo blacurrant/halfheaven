@@ -24,6 +24,8 @@ export type Job = {
   stageIndex: number;
   progress: number;
   styleId: string;
+  referenceName?: string;
+  referencePath?: string;
   targetName: string;
   startedAt: number;
   finishedAt?: number;
@@ -102,7 +104,10 @@ function parseStage(line: string): number | null {
 }
 
 export async function startJob(opts: {
-  styleId: string;
+  styleId?: string;
+  /** An uploaded reel to copy. Takes precedence over `styleId`. */
+  referencePath?: string;
+  referenceName?: string;
   targetPaths: string[];
   targetName: string;
   overrides?: Record<string, unknown>;
@@ -111,8 +116,12 @@ export async function startJob(opts: {
   const dir = workDir(id);
   fs.mkdirSync(dir, { recursive: true });
 
-  const style = availableStyles().find((s) => s.id === opts.styleId) ?? availableStyles()[0];
-  const reference = path.join(REPO, style.file);
+  // The CLI has always taken any file as its reference; only this app insisted
+  // on a fixed menu. An uploaded reel is the ordinary case now, and the baked
+  // styles are what someone gets for having nothing to point at.
+  const style = availableStyles().find((s) => s.id === opts.styleId);
+  const reference = opts.referencePath ?? path.join(REPO, (style ?? availableStyles()[0]).file);
+  const referenceName = opts.referenceName ?? style?.name ?? availableStyles()[0]?.name ?? "reference";
   const out = path.join(dir, "out.mp4");
 
   const job: Job = {
@@ -120,7 +129,9 @@ export async function startJob(opts: {
     status: "running",
     stageIndex: 0,
     progress: 0.08, // never start at zero
-    styleId: style.id,
+    styleId: style?.id ?? "uploaded",
+    referenceName,
+    referencePath: reference,
     targetName: opts.targetName,
     startedAt: Date.now(),
     log: [],
@@ -134,6 +145,9 @@ export async function startJob(opts: {
     // progress UI sits at its starting value until the job is already finished.
     ["-u", "-m", "halfheaven.cli", "--reference", reference, "--target", ...opts.targetPaths,
      "--out", out, "--work", dir,
+     // the reading step already measured this reference; reuse it
+     ...(fs.existsSync(`${reference}.fingerprint.json`)
+       ? ["--fingerprint", `${reference}.fingerprint.json`] : []),
      ...(opts.overrides && Object.keys(opts.overrides).length
        ? ["--overrides", JSON.stringify(opts.overrides)] : [])],
     { cwd: REPO, env: { ...process.env, PYTHONUNBUFFERED: "1", PYTHONPATH: path.join(REPO, "packages", "pipeline") } }

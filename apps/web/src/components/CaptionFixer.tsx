@@ -60,7 +60,7 @@ export default function CaptionFixer({
   };
 
   if (!ready) {
-    return <div className="fix-empty">Make an edit first, then you can fix any caption here.</div>;
+    return <div className="fix-empty">The captions show up here once the edit is ready.</div>;
   }
 
   return (
@@ -112,7 +112,7 @@ export default function CaptionFixer({
         <span className="tiny">
           {changed ? `${changed} card${changed > 1 ? "s" : ""} changed` : "Tap a word to make it pop"}
         </span>
-        {error && <span className="tiny" style={{ color: "var(--accent)" }}>{error}</span>}
+        {error && <span className="tiny" style={{ color: "var(--bad)" }}>{error}</span>}
         <button className="btn primary sm" disabled={!changed || busy} onClick={apply}>
           {busy ? "Re-rendering…" : "Apply fixes"}
         </button>

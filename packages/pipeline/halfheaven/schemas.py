@@ -34,9 +34,12 @@ class VideoClip(BaseModel):
     scale_to: float | None = Field(
         default=None, ge=1.0, description="punch-in target scale; >=1, None means no move"
     )
-    # Where the crop sits horizontally, 0 left to 1 right. Reframing off-centre
-    # is what turns one locked-off camera into something with shot variety.
+    # The point the frame is centred on, as fractions of the source frame: usually
+    # the speaker's face. The renderer centres its crop and its punch-in here and
+    # then keeps the window inside the picture, so a subject near an edge lands
+    # off-centre rather than the crop running into black. 0.5, 0.5 is the middle.
     crop_x: float = Field(default=0.5, ge=0.0, le=1.0)
+    crop_y: float = Field(default=0.5, ge=0.0, le=1.0)
     ease: Literal["linear", "outCubic", "inOutCubic"] = "outCubic"
 
     @property
@@ -202,6 +205,10 @@ class CaptionProfile(BaseModel):
     # A type category, not a typeface: identifying a specific font from pixels
     # is unreliable, so we match character using faces we may embed.
     font_category: str = "grotesque"
+    # A specific shipped face, when the reference's character was measured
+    # closely enough to choose one. Wins over font_category, which stays the
+    # fallback for a missing file and for programs written before it existed.
+    font_file: str | None = None
     font_weight: int = 800
 
     # how many words share a card
@@ -267,6 +274,21 @@ class FramingProfile(BaseModel):
     letterbox_bottom_pct: float = Field(default=0.0, ge=0.0, lt=0.5)
 
 
+class TypePlan(BaseModel):
+    """How the reference uses type across the edit, beyond how one card looks.
+
+    Measured by the fingerprint and carried here so the planner can act on it:
+    how much of the runtime carries type, whether it stays put or moves around
+    the frame, and how often a word breaks into the accent colour.
+    """
+
+    duty_cycle: float = Field(default=1.0, ge=0.0, le=1.0)
+    placement: Literal["fixed", "banded", "composed"] = "fixed"
+    centroid: tuple[float, float] = (0.5, 0.72)
+    spread: float = Field(default=0.0, ge=0.0)
+    accent_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
 class StyleProfile(BaseModel):
     """Everything we recovered from a reference video, content-agnostic."""
 
@@ -291,6 +313,7 @@ class StyleProfile(BaseModel):
     music: MusicProfile = Field(default_factory=MusicProfile)
     grade: GradeProfile = Field(default_factory=GradeProfile)
     framing: FramingProfile = Field(default_factory=FramingProfile)
+    type_plan: TypePlan | None = None
 
 
 EditProgram.model_rebuild()

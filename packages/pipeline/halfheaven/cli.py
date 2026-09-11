@@ -13,7 +13,9 @@ import pathlib
 import sys
 
 from halfheaven.analyze.reference import build_style_profile
-from halfheaven.analyze.subject import needs_reframe, track_subject
+from halfheaven.analyze.fingerprint import extract_fingerprint
+from halfheaven.analyze.subject import locate_subject, needs_reframe
+from halfheaven.plan.typography import apply_fingerprint, describe
 from halfheaven.groq.asr import Transcript
 from halfheaven.groq.client import GroqClient
 from halfheaven.media.audio import extract_audio
@@ -39,6 +41,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", default="out.mp4")
     parser.add_argument("--work", default="work")
     parser.add_argument("--music", default="", help="a bed to mix under the speech")
+    parser.add_argument("--fingerprint", default="",
+                        help="the reference's measured fingerprint (JSON from "
+                             "`fingerprint --json`); measured here when absent")
     parser.add_argument("--overrides", default="",
                         help="JSON patch over the measured style profile")
     args = parser.parse_args(argv)
@@ -65,6 +70,18 @@ def main(argv: list[str] | None = None) -> int:
     if profile.grade.measured:
         print(f"      grade LAB mean={tuple(round(v, 1) for v in profile.grade.lab_mean)} "
               f"std={tuple(round(v, 1) for v in profile.grade.lab_std)}")
+    # Type comes from the fingerprint, which measures captions the way a viewer
+    # sees them. The analyzer above only recognises a stable subtitle band, finds
+    # nothing on an editorial reference, and left every such render on default
+    # type. Applied before the creator's overrides, which always win.
+    fingerprint_path = pathlib.Path(args.fingerprint) if args.fingerprint else None
+    if fingerprint_path and fingerprint_path.exists():
+        measured = json.loads(fingerprint_path.read_text())
+    else:
+        measured = extract_fingerprint(args.reference, stride=3).as_dict()
+    profile = apply_fingerprint(profile, measured)
+    print(f"      {describe(profile)}")
+
     if args.overrides:
         # What the creator asked for, layered over what we measured.
         patch = json.loads(args.overrides)
@@ -134,15 +151,24 @@ def main(argv: list[str] | None = None) -> int:
     canvas = Canvas(width=reference_info.width, height=reference_info.height,
                     fps=target_info.fps)
 
-    tracker = None
     if needs_reframe(target_info, canvas):
-        # Centre-cropping a wide source discards most of the frame, so follow
-        # the speaker rather than hoping they stand in the middle.
         print(f"      reframing {target_info.width}x{target_info.height} "
               f"-> {canvas.width}x{canvas.height}, following the subject")
-        # Tracking reads one file, so it applies to a single take; several
-        # takes fall back to the framing pattern.
-        tracker = None if reel else (lambda spans: track_subject(takes[0], spans))
+
+    # Every framing centres on the subject, on every source. It used to run
+    # only for wide footage, which left each punch-in on a vertical phone clip
+    # drifting in a fixed direction whether the speaker was there or not. A
+    # face is found in ~21ms, so there is no reason to ration it.
+    def tracker(spans):
+        if reel is None:
+            return locate_subject(takes[0], spans)
+        # A span may cross from one take into the next; the subject is judged
+        # in whichever take holds most of it.
+        located = []
+        for span in spans:
+            src, start, end = max(reel.split(span), key=lambda piece: piece[2] - piece[1])
+            located.append(locate_subject(src, [(start, end)])[0])
+        return located
 
     program = build_program(
         source=str(takes[0]),

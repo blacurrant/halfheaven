@@ -56,12 +56,13 @@ def test_a_segment_seeks_at_the_input(tmp_path):
 def test_a_punched_segment_animates_the_zoom(tmp_path):
     clip = VideoClip(src=SOURCE, start=0.0, end=1.0, scale_to=1.3)
     graph = graph_of(build_segment_command(clip, CANVAS, tmp_path / "s.mp4", with_audio=False))
-    assert "eval=frame" in graph, "the zoom must be re-evaluated per frame"
+    # zoompan re-evaluates its window every frame; d=1 keeps one output frame per input
+    assert "zoompan=" in graph and ":d=1" in graph, "the zoom must be re-evaluated per frame"
 
 
 def test_an_unpunched_segment_has_no_zoom(tmp_path):
     command = build_segment_command(program().video[0], CANVAS, tmp_path / "s.mp4", with_audio=False)
-    assert "eval=frame" not in graph_of(command)
+    assert "zoompan" not in graph_of(command)
 
 
 def test_the_finish_pass_reads_at_most_two_inputs(tmp_path):

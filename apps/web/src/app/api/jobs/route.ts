@@ -15,9 +15,17 @@ export async function POST(req: Request) {
   const files = form.getAll("target").filter((f): f is File => f instanceof File);
   const file = files[0];
   const styleId = String(form.get("styleId") ?? "");
+  // A reference already staged by the reading step, so the same upload is not
+  // sent twice and the render copies exactly the reel that was measured.
+  const referencePath = String(form.get("referencePath") ?? "");
+  const referenceName = String(form.get("referenceName") ?? "");
   const overrides = JSON.parse(String(form.get("overrides") ?? "{}"));
   if (!file) {
     return Response.json({ error: "No video supplied." }, { status: 400 });
+  }
+  if (referencePath && !fs.existsSync(referencePath)) {
+    return Response.json(
+      { error: "That reference is no longer on disk. Read it again." }, { status: 400 });
   }
 
   // Stage the upload where the pipeline can reach it before the job exists,
@@ -32,6 +40,13 @@ export async function POST(req: Request) {
   }
 
   const name = files.length === 1 ? file.name : `${files.length} takes`;
-  const job = await startJob({ styleId, targetPaths: staged, targetName: name, overrides });
+  const job = await startJob({
+    styleId,
+    referencePath: referencePath || undefined,
+    referenceName: referenceName || undefined,
+    targetPaths: staged,
+    targetName: name,
+    overrides,
+  });
   return Response.json({ id: job.id });
 }

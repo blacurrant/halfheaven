@@ -16,7 +16,7 @@ import pathlib
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from halfheaven.render.caption_frames import CaptionFrame, frames_for
-from halfheaven.render.fonts import load_font
+from halfheaven.render.fonts import load_face, load_font
 from halfheaven.schemas import Canvas, CaptionProfile, TextRun
 
 SIDE_MARGIN_PCT = 0.06
@@ -39,6 +39,17 @@ def _ease_out(t: float) -> float:
     return 1 - (1 - max(0.0, min(1.0, t))) ** 3
 
 
+def _font_for(profile: CaptionProfile, size: int) -> ImageFont.FreeTypeFont:
+    """The face a profile asks for: a chosen file when there is one, else its category.
+
+    Loading by category alone is why a reference measured as an editorial italic
+    still rendered in the house grotesque - there was no way to name the face.
+    """
+    if profile.font_file:
+        return load_face(profile.font_file, size, profile.font_weight)
+    return load_font(profile.font_category, size, profile.font_weight)
+
+
 class _Token:
     """One drawable word, at the size and in the face its own run asks for."""
 
@@ -51,8 +62,7 @@ class _Token:
         self.style = profile
         base = max(8, int(canvas.height * profile.size_pct))
         self.size = max(6, int(base * factor))
-        self.font: ImageFont.FreeTypeFont = load_font(
-            profile.font_category, self.size, profile.font_weight)
+        self.font: ImageFont.FreeTypeFont = _font_for(profile, self.size)
         self.width = self.font.getlength(text)
         self.height = self.size
 
@@ -65,7 +75,7 @@ class _Token:
         if self.width <= max_width or self.width <= 0:
             return
         self.size = max(6, int(self.size * max_width / self.width))
-        self.font = load_font(self.style.font_category, self.size, self.style.font_weight)
+        self.font = _font_for(self.style, self.size)
         self.width = self.font.getlength(self.text)
         self.height = self.size
 
@@ -114,8 +124,16 @@ def _lines(tokens: list[_Token], profile: CaptionProfile, max_width: float,
 
 def render_frame(frame: CaptionFrame, canvas: Canvas, profile: CaptionProfile,
                  out_path: str | pathlib.Path,
-                 styles: dict[str, CaptionProfile] | None = None) -> pathlib.Path:
-    """Draw one caption still, transparent everywhere except the card."""
+                 styles: dict[str, CaptionProfile] | None = None,
+                 anchor: tuple[float, float] | None = None) -> pathlib.Path:
+    """Draw one caption still, transparent everywhere except the card.
+
+    `anchor` places this card specifically. Without it every caption in a
+    program lands at the one position on its style, which is the difference
+    between a subtitle track and typography: a card that can only ever sit in
+    the same band cannot dodge the speaker, cannot answer the shot, and reads
+    as burned-in subtitles however well it is set.
+    """
     out_path = pathlib.Path(out_path)
     image = Image.new("RGBA", (canvas.width, canvas.height), (0, 0, 0, 0))
     tokens = _tokens(frame, canvas, profile, styles)
@@ -131,9 +149,14 @@ def render_frame(frame: CaptionFrame, canvas: Canvas, profile: CaptionProfile,
         heights = [max(t.height for t in line) * LINE_SPACING for line in lines]
         block = sum(heights)
         widths = [sum(t.width for t in line) + space * (len(line) - 1) for line in lines]
-        centre_x = canvas.width * profile.anchor[0]
+        place = anchor or profile.anchor
         margin = canvas.height * SIDE_MARGIN_PCT
-        top = canvas.height * profile.anchor[1] - block / 2
+        # Keep the widest line inside the frame. A card placed off-centre near
+        # an edge would otherwise run off it, and Pillow clips without a word.
+        half = max(widths) / 2
+        side = canvas.width * SIDE_MARGIN_PCT
+        centre_x = min(max(canvas.width * place[0], side + half), canvas.width - side - half)
+        top = canvas.height * place[1] - block / 2
         top = max(margin, min(top, canvas.height - block - margin))
 
         pad = max(6, int(tokens[0].size * 0.28))
@@ -244,7 +267,8 @@ def build_caption_track(program, work_dir: str | pathlib.Path) -> pathlib.Path:
             continue
         for order, frame in enumerate(frames):
             card = render_frame(frame, canvas, profile,
-                                work_dir / f"cap_{index:04d}_{order:03d}.png", styles)
+                                work_dir / f"cap_{index:04d}_{order:03d}.png", styles,
+                                anchor=caption.anchor)
             spans.append((card, frame.duration))
         cursor = min(program.duration, start + caption.duration)
 

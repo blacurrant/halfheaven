@@ -18,6 +18,8 @@ peak memory is bounded by a single clip no matter how long the edit is.
 from __future__ import annotations
 
 import os
+import math
+import functools
 import pathlib
 import subprocess
 
@@ -34,19 +36,62 @@ SEGMENT_CRF = 16
 OUTPUT_CRF = 20
 
 
-def _zoom_expression(scale_to: float) -> str:
-    """Ease-out-cubic from 1.0 to `scale_to` over PUNCH_SECONDS, driven by `t`.
+# zoompan places its window on whole input pixels, so a slow push visibly steps.
+# Working at twice the canvas size halves that: measured on a still frame, the
+# wobble at the zoom's fixed point fell from 0.93 px RMS to 0.51.
+PUNCH_UPSCALE = 2
 
-    Evaluated by `scale` with eval=frame. zoompan was the obvious filter for
-    this and is the wrong one: its d=1 did not take effect and it emitted ~512
-    output frames per input frame, turning an 11.3s clip into 5792s. `crop`
-    cannot do it either - crop evaluates width and height once at configuration
-    time, where `t` does not exist. `scale` with eval=frame re-evaluates every
-    frame and preserves the frame count.
+
+@functools.lru_cache(maxsize=64)
+def _source_size(src: str) -> tuple[int, int] | None:
+    """Source dimensions, or None when they cannot be read.
+
+    A command builder should not crash on an unreadable path - ffmpeg will say
+    so when it runs - so an unknown size simply means "no slack to move in".
     """
-    amount = scale_to - 1.0
-    progress = f"min(1,t/{PUNCH_SECONDS})"
-    return f"(1+{amount:.4f}*(1-pow(1-{progress},3)))"
+    try:
+        info = probe(src)
+    except Exception:
+        return None
+    return (info.width, info.height) if info.width and info.height else None
+
+
+def _placement(source: int, window: int, centre: float) -> tuple[int, float]:
+    """Where a `window`-long crop starts inside `source`, and where `centre` lands in it.
+
+    The window is centred on the subject and then pushed back inside the
+    picture, so near an edge the subject ends up off-centre rather than the crop
+    running into black. Returns the offset in pixels and the subject's position
+    inside the window as a fraction - which is what a punch-in must centre on.
+    """
+    slack = max(0, source - window)
+    start = int(round(min(max(centre * source - window / 2, 0.0), slack)))
+    inside = (centre * source - start) / window if window else 0.5
+    return start, float(min(max(inside, 0.0), 1.0))
+
+
+def _zoompan(scale_to: float, centre: tuple[float, float], canvas: Canvas) -> str:
+    """A punch-in that grows toward the subject rather than toward a corner.
+
+    Two earlier approaches were wrong in ways no test caught, because every test
+    read the program instead of looking at a frame. `scale` with eval=frame grows
+    the picture correctly, but `crop` fixes its input size when the graph is
+    configured - at zoom 1.0, with no slack - so every offset after it clamps to
+    zero. Its default centring is computed the same way, which anchored every
+    punch-in on the top-left corner and slid the speaker down and right as it
+    grew. zoompan evaluates its window per frame against a size it actually
+    knows. It was once dropped for emitting hundreds of frames per input; with
+    d=1 it emits one (measured on ffmpeg 9.0.1), and a test holds it there.
+
+    The ease runs on `it`, the input timestamp in seconds, so it takes
+    PUNCH_SECONDS whatever the source frame rate.
+    """
+    x, y = centre
+    zoom = f"1+{scale_to - 1.0:.4f}*(1-pow(1-min(1\\,it/{PUNCH_SECONDS})\\,3))"
+    left = f"max(0\\,min(iw*{x:.4f}-iw/zoom/2\\,iw-iw/zoom))"
+    top = f"max(0\\,min(ih*{y:.4f}-ih/zoom/2\\,ih-ih/zoom))"
+    return (f"zoompan=z='{zoom}':x='{left}':y='{top}':d=1"
+            f":s={canvas.width}x{canvas.height}:fps={canvas.fps}")
 
 
 def build_segment_command(
@@ -58,22 +103,30 @@ def build_segment_command(
     """Render one clip. Exactly one input, so memory is bounded by one clip."""
     width, height, fps = canvas.width, canvas.height, canvas.fps
 
+    # Cover the canvas, then take a canvas-sized window centred on the subject.
+    # Both sizes are fixed before the graph starts, which is the only moment
+    # `crop` reads them - so this offset, unlike one placed after a zoom, is
+    # actually honoured. Even dimensions: yuv420p cannot encode odd ones.
+    size = _source_size(str(clip.src))
+    if size:
+        cover = max(width / size[0], height / size[1])
+        cover_w = max(width, 2 * math.ceil(size[0] * cover / 2))
+        cover_h = max(height, 2 * math.ceil(size[1] * cover / 2))
+    else:
+        cover_w, cover_h = width, height
+    left, inside_x = _placement(cover_w, width, clip.crop_x)
+    top, inside_y = _placement(cover_h, height, clip.crop_y)
+
     filters = [
-        f"scale={width}:{height}:force_original_aspect_ratio=increase",
-        f"crop={width}:{height}",
+        f"scale={cover_w}:{cover_h}",
+        f"crop={width}:{height}:{left}:{top}",
+        f"fps={fps}",
     ]
-    if clip.crop_x != 0.5:
-        # shift the visible window before zooming, so an off-centre framing
-        # reads as a different camera position rather than a lens change
-        filters.append(f"crop=iw:ih:(iw-ow)*{clip.crop_x:.3f}:0")
     if clip.scale_to and clip.scale_to > 1.0:
-        zoom = _zoom_expression(clip.scale_to)
-        # Dimensions rounded to even numbers; yuv420p cannot encode odd ones.
-        filters.append(
-            f"scale=w='trunc(iw*{zoom}/2)*2':h='trunc(ih*{zoom}/2)*2':eval=frame"
-        )
-        filters.append(f"crop={width}:{height}")
-    filters += [f"fps={fps}", "setsar=1", "format=yuv420p"]
+        if PUNCH_UPSCALE > 1:
+            filters.append(f"scale={width * PUNCH_UPSCALE}:{height * PUNCH_UPSCALE}")
+        filters.append(_zoompan(clip.scale_to, (inside_x, inside_y), canvas))
+    filters += ["setsar=1", "format=yuv420p"]
 
     command = [
         ffmpeg(), "-v", "error", "-y",

@@ -110,9 +110,11 @@ MEASURED_FIELDS = ("fill_hex", "anchor")
 # punch shipped once and read as "the same font, bigger and bolder".
 GROUPS: dict[str, tuple[str, ...]] = {
     "sans": ("grotesque", "neutral", "geometric", "condensed", "display"),
-    "serif": ("didone", "slab"),
+    "serif": ("didone", "slab", "serif"),
     "mono": ("mono",),
-    "soft": ("rounded", "handwritten"),
+    # A script is soft rather than serif: its counterweight is a plain sans,
+    # and pairing it against a didone would be two characterful faces fighting.
+    "soft": ("rounded", "handwritten", "script"),
 }
 _GROUP_OF = {face: group for group, faces in GROUPS.items() for face in faces}
 

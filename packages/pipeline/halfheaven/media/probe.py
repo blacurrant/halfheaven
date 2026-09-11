@@ -41,6 +41,26 @@ def _fraction(value: str | None) -> float:
     return float(value)
 
 
+def _rotation(video: dict) -> int:
+    """Display rotation in degrees, from side data or the legacy `rotate` tag.
+
+    Phones store a portrait clip as landscape pixels plus an instruction to turn
+    them. ffmpeg's decoder and OpenCV both obey it, so every frame anyone reads
+    is portrait - while the stream's `width` and `height` still describe the
+    unrotated pixels.
+    """
+    for item in video.get("side_data_list") or []:
+        if "rotation" in item:
+            try:
+                return int(round(float(item["rotation"])))
+            except (TypeError, ValueError):
+                pass
+    try:
+        return int(round(float((video.get("tags") or {}).get("rotate", 0))))
+    except (TypeError, ValueError):
+        return 0
+
+
 def probe(path: str | pathlib.Path) -> MediaInfo:
     path = pathlib.Path(path)
     if not path.exists():
@@ -62,11 +82,18 @@ def probe(path: str | pathlib.Path) -> MediaInfo:
 
     duration = float(payload.get("format", {}).get("duration") or video.get("duration") or 0.0)
 
+    # Report the picture as it is seen, not as it is stored. Every consumer -
+    # the canvas, the reframe check, the renderer's crop - wants display size,
+    # and a rotated phone clip read as landscape gets squashed or turned sideways.
+    width, height = int(video["width"]), int(video["height"])
+    if _rotation(video) % 180:
+        width, height = height, width
+
     return MediaInfo(
         path=path,
         duration=duration,
-        width=int(video["width"]),
-        height=int(video["height"]),
+        width=width,
+        height=height,
         fps=_fraction(video.get("avg_frame_rate") or video.get("r_frame_rate")),
         video_codec=video.get("codec_name", ""),
         has_audio=audio is not None,
