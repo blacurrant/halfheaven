@@ -3,7 +3,7 @@ import path from "node:path";
 import { REPO, jobPaths } from "@/lib/pipeline";
 
 export const runtime = "nodejs";
-export const maxDuration = 600;
+export const maxDuration = 300; // Vercel Hobby's ceiling; Next does not enforce it locally
 
 /** Switching a caption look only changes captions, so it is a restyle and a
  *  render - the transcript and the cut are already decided. */

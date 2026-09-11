@@ -4,7 +4,7 @@ import path from "node:path";
 import { REPO, jobPaths } from "@/lib/pipeline";
 
 export const runtime = "nodejs";
-export const maxDuration = 600;
+export const maxDuration = 300; // Vercel Hobby's ceiling; Next does not enforce it locally
 
 /** A bed is mixed in the finish pass, so adding or removing one is a render
  *  rather than a re-run: the cut and the transcript are already decided. */

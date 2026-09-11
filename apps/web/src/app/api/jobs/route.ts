@@ -3,7 +3,7 @@ import path from "node:path";
 import { listJobs, startJob, workDir } from "@/lib/pipeline";
 
 export const runtime = "nodejs";
-export const maxDuration = 600;
+export const maxDuration = 300; // Vercel Hobby's ceiling; Next does not enforce it locally
 
 export async function GET() {
   return Response.json({ jobs: listJobs().map(({ log, ...j }) => j) });

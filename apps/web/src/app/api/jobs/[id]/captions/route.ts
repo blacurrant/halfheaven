@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { jobPaths, recut } from "@/lib/pipeline";
 
 export const runtime = "nodejs";
-export const maxDuration = 600;
+export const maxDuration = 300; // Vercel Hobby's ceiling; Next does not enforce it locally
 
 type Run = { text: string; style: string; t: number | null };
 type Card = { t: number; duration: number; runs: Run[] };

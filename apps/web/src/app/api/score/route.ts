@@ -5,7 +5,7 @@ import { getJob, workDir } from "@/lib/pipeline";
 import { scoreAgainst } from "@/lib/score";
 
 export const runtime = "nodejs";
-export const maxDuration = 600;
+export const maxDuration = 300; // Vercel Hobby's ceiling; Next does not enforce it locally
 
 export async function POST(req: Request) {
   const { jobId } = await req.json();

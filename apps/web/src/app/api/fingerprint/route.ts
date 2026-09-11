@@ -1,7 +1,7 @@
 import { startRead, stageFile } from "@/lib/fingerprint";
 
 export const runtime = "nodejs";
-export const maxDuration = 600;
+export const maxDuration = 300; // Vercel Hobby's ceiling; Next does not enforce it locally
 
 export async function POST(req: Request) {
   const form = await req.formData();
