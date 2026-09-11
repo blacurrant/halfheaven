@@ -262,7 +262,7 @@ export default function Lab() {
       )}
 
       <p className="tiny" style={{ marginTop: 44, color: "var(--faint)" }}>
-        <Link href="/" style={{ color: "var(--muted)" }}>Back to the studio</Link>
+        <Link href="/studio" style={{ color: "var(--muted)" }}>Back to the studio</Link>
       </p>
     </main>
   );

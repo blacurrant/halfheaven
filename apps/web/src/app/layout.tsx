@@ -5,8 +5,12 @@ import "./globals.css";
 const display = Bricolage_Grotesque({ variable: "--font-display", subsets: ["latin"] });
 const ui = Plus_Jakarta_Sans({ variable: "--font-ui", subsets: ["latin"] });
 // the face the renderer actually uses for stressed words, so the readout can
-// show a creator the real thing rather than the word "didone"
-const didone = Bodoni_Moda({ variable: "--font-didone", subsets: ["latin"], weight: ["700", "900"] });
+// show a creator the real thing rather than the word "didone". The landing
+// page sets its stressed words in the italic, so that cut is loaded too
+// rather than left for the browser to fake by slanting the roman.
+const didone = Bodoni_Moda({
+  variable: "--font-didone", subsets: ["latin"], weight: ["700", "900"], style: ["normal", "italic"],
+});
 
 export const metadata: Metadata = {
   title: "Halfheaven",

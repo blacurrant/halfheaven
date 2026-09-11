@@ -1,656 +1,446 @@
-"use client";
+import type { Metadata } from "next";
+
+import ThemeToggle from "@/components/ThemeToggle";
+import Waitlist from "@/components/Waitlist";
+
+import s from "./landing.module.css";
 
 /**
- * Point at a reel, hand over your footage, get it back cut that way.
+ * The pitch, at the root. The studio it sells lives at /studio.
  *
- * The first screen asks for exactly two things. Everything a creator might
- * reach for afterwards - the chat, caption fixes, looks, music, the timeline,
- * what we read from the reel, how close we got - still exists, but behind Edit
- * or the ⋯ menu: someone who only wanted their video edited should never have
- * to read past controls to get it.
- *
- * Reading the reel starts the moment it is dropped. That work depends only on
- * the reel and takes about a third of its length, which is time the user
- * spends finding their own footage anyway.
+ * It argues the problem before the product: a small creator pays for editing
+ * either in rupees or in evenings, and when an editor leaves, their look leaves
+ * with them. Nothing here is invented - no user counts, no testimonials, no
+ * real creator's reel in the hero - and the India features that are not built
+ * yet say "coming at launch" rather than pretending.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-
-import CaptionFixer from "@/components/CaptionFixer";
-import Drop from "@/components/Drop";
-import Readout from "@/components/Readout";
-import Scorecard from "@/components/Scorecard";
-import ThemeToggle from "@/components/ThemeToggle";
-import Timeline from "@/components/Timeline";
-import type { Fingerprint } from "@/lib/fingerprint";
-import type { Score } from "@/lib/score";
-
-type Read = {
-  id: string; status: "running" | "done" | "error"; name: string; videoPath: string;
-  error?: string; fingerprint?: Fingerprint;
+export const metadata: Metadata = {
+  title: "Halfheaven: your editor’s style, on every video",
+  description:
+    "Get one video edited the way you love. Halfheaven edits every video after it to match - the cuts, captions, " +
+    "colour and pace - for a fraction of what an editor costs.",
 };
-type Style = { id: string; name: string };
-type Receipt = {
-  clips: number; captions: number; emphasised: number; punches: number;
-  wordsCut: number; sourceSeconds: number; outputSeconds: number;
-};
-type Job = {
-  id: string; status: "running" | "done" | "error"; stageIndex: number; progress: number;
-  targetName: string; error?: string;
-  profile?: unknown; receipt?: Receipt; clips?: { start: number; end: number }[];
-};
-type Msg = { who: "me" | "bot"; text: string; changed?: string[] };
-type Panel = "edit" | "read" | "score" | null;
-type Tab = "ask" | "captions" | "style";
 
-/* What the app is doing, said the way a person would say it. */
-const DOING = [
-  "Studying the look",
-  "Listening to your video",
-  "Deciding what to cut",
-  "Laying out the captions",
-  "Putting it together",
+// ---- icons ------------------------------------------------------------------
+
+const Svg = ({ children, size = 20 }: { children: React.ReactNode; size?: number }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.9"
+       strokeLinecap="round" strokeLinejoin="round" aria-hidden>{children}</svg>
+);
+const Check = ({ size = 14 }: { size?: number }) => <Svg size={size}><path d="M5 12.5l4.5 4.5L19 7" /></Svg>;
+const Rupee = () => <Svg><path d="M7 5h10M7 9.5h10M8 5c5.5 0 5.5 9 0 9h-1l7 6" /></Svg>;
+const Clock = () => <Svg><circle cx="12" cy="12" r="8.5" /><path d="M12 7.5V12l3 2" /></Svg>;
+const Loop = () => <Svg><path d="M4 12a8 8 0 0 1 13.7-5.6L20 8.5M20 12a8 8 0 0 1-13.7 5.6L4 15.5" /><path d="M20 4v4.5h-4.5M4 20v-4.5h4.5" /></Svg>;
+const Layers = () => <Svg><path d="M12 3.5l8.5 4.5L12 12.5 3.5 8 12 3.5z" /><path d="M3.5 12.5L12 17l8.5-4.5M3.5 16.5L12 21l8.5-4.5" /></Svg>;
+const Arrow = () => <Svg><path d="M5 12h14M13 6l6 6-6 6" /></Svg>;
+
+// ---- the words --------------------------------------------------------------
+
+const PAINS = [
+  {
+    icon: <Rupee />, stat: "₹10–30k a month", title: "The editor bill",
+    body: "A good short-form editor charges ₹500–3,000 a reel. Post five times a week and editing can quietly take a third of what you earn.",
+  },
+  {
+    icon: <Clock />, stat: "2–4 hours a reel", title: "The do-it-yourself tax",
+    body: "Edit it yourself and a 30-second reel takes an evening. That’s time you’re not shooting, writing or talking to brands.",
+  },
+  {
+    icon: <Loop />, stat: "Back to square one", title: "The editor churn",
+    body: "Your look lives in your editor’s head. When they get busy, raise their rates or leave, it goes with them, and the next one takes weeks to get it right.",
+  },
 ];
 
-const SUGGESTIONS = [
-  "Bigger captions",
-  "Cut it tighter",
-  "Less zooming",
-  "Warmer colour",
-  "Move captions up",
-  "Fewer words per line",
-  "Punch more words",
-  "Keep more pauses",
-  "All caps captions",
+const STEPS = [
+  {
+    title: "Pick your reference",
+    body: "One video your editor made, or any reel whose style you love. Halfheaven reads it: the cut rhythm, the caption type and placement, the colour, the pace.",
+  },
+  {
+    title: "Drop your raw footage",
+    body: "Talk to camera, keep every take, upload. No timeline, no templates, no keyframes.",
+  },
+  {
+    title: "Get it back in your style",
+    body: "Cut, captioned and graded to match. Want something different? Say it in plain words (“bigger captions”, “cut it tighter”) and it redoes the edit.",
+  },
 ];
 
-const HELLO: Msg = { who: "bot", text: "Tell me what to change — plain words are fine." };
+// what it costs you, three ways
+const COMPARE: [string, string, string, string][] = [
+  ["Cost", "₹10,000–30,000 a month", "Free, plus your evenings", "From ₹499 a month"],
+  ["Turnaround", "1–3 days a video", "2–4 hours a reel", "Minutes, not days"],
+  ["The same look every time", "Only while they stay", "Only on good days", "Saved to your account"],
+  ["When they’re busy or leave", "Start over with someone new", "It stops when you stop", "Your style stays with you"],
+  ["Asking for changes", "Another round on WhatsApp", "Back into the timeline", "Say it in plain words"],
+];
 
-const mb = (files: File[]) => `${(files.reduce((a, f) => a + f.size, 0) / 1e6).toFixed(1)} MB`;
+const INDIA = [
+  {
+    glyph: "yeh", title: "Hinglish that reads right",
+    body: "Code-mixed speech (“bhai, yeh game-changer hai”) captioned the way you said it, not mangled into one language.",
+  },
+  {
+    glyph: "अ", title: "Hindi and regional type",
+    body: "Devanagari and other Indian scripts, set in typefaces drawn for them rather than a fallback font.",
+  },
+  {
+    glyph: "₹", title: "Pay with UPI",
+    body: "Monthly plans on UPI Autopay. No international card, no dollar pricing.",
+  },
+  {
+    glyph: "9:16", title: "Reels and Shorts first",
+    body: "Vertical by default, with captions kept clear of the Instagram and YouTube buttons.",
+  },
+];
 
-export default function Studio() {
-  // ---- what goes in ------------------------------------------------------
-  const [refFile, setRefFile] = useState<File | null>(null);
-  const [read, setRead] = useState<Read | null>(null);
-  const [elapsed, setElapsed] = useState(0);
-  const readSeq = useRef(0);                      // the latest reel dropped wins
-  const [styles, setStyles] = useState<Style[]>([]);
-  const [presets, setPresets] = useState(false);  // picking a built-in look instead of a reel
-  const [preset, setPreset] = useState<Style | null>(null);
-  const [targets, setTargets] = useState<File[]>([]);
+const EDITORS = [
+  { title: "One saved style per client", body: "Build a creator’s signature look once. Every video after follows it." },
+  { title: "Review before it posts", body: "Fix any caption card by card, or send the client a link to approve." },
+  { title: "More clients, same hours", body: "Spend your time on the edits that need taste, not the ones that need patience." },
+];
 
-  // ---- the render --------------------------------------------------------
-  const [job, setJob] = useState<Job | null>(null);
-  const [uploaded, setUploaded] = useState(1);
-  const lastGood = useRef<Job | null>(null);      // a failed tweak falls back to this
-  const [overrides, setOverrides] = useState<Record<string, unknown>>({});
-  const [videoKey, setVideoKey] = useState(0);
+const TIERS = [
+  {
+    name: "Creator", price: "₹499", per: "/month", for: "For creators posting a few times a week.",
+    feats: ["1 saved style", "20 videos a month", "Cuts, captions and colour, matched",
+            "English, Hindi and Hinglish captions", "Changes in plain words"],
+  },
+  {
+    name: "Pro", price: "₹1,499", per: "/month", for: "For creators who post every day.", ribbon: "For daily posters",
+    feats: ["5 saved styles", "60 videos a month", "Everything in Creator",
+            "Every Indian language we support", "A music bed that ducks under your voice", "Priority rendering"],
+  },
+  {
+    name: "Agency", price: "₹4,999", per: "/seat/month", for: "For editors and teams handling several creators.",
+    feats: ["Unlimited client styles", "200 videos a month per seat", "Everything in Pro",
+            "Review links for clients", "Styles shared across the team"],
+  },
+];
 
-  // ---- watching it -------------------------------------------------------
-  // Browsers only autoplay muted, so the preview starts silent and one tap
-  // turns it up. A comparison plays two files at once, so only the edited
-  // side carries sound - both would double every word.
-  const [sound, setSound] = useState(false);
-  const [compare, setCompare] = useState(false);
-  const [split, setSplit] = useState(50);
-  const [playhead, setPlayhead] = useState(0);
-  const [menu, setMenu] = useState(false);
-  const [panel, setPanel] = useState<Panel>(null);
-  const [tab, setTab] = useState<Tab>("ask");
+const FAQS = [
+  {
+    q: "Is this copying someone else’s content?",
+    a: "No. Halfheaven copies a style: how a video is cut, captioned, coloured and paced. It never reuses anyone’s footage, music or words. Your video is made entirely from your own footage.",
+  },
+  {
+    q: "Will it replace my editor?",
+    a: "It can, if editing is only a cost for you. Many creators will keep their editor for the big videos and let Halfheaven handle the everyday ones in the same style. Editors use it to take on more clients.",
+  },
+  {
+    q: "Which languages does it support?",
+    a: "English, Hindi and Hinglish at launch, with more Indian languages following. Tell us yours when you join the waitlist.",
+  },
+  {
+    q: "What if I don’t like the edit?",
+    a: "Tell it what to change in plain words, or fix a caption yourself, card by card. You only export what you’re happy with.",
+  },
+  {
+    q: "What if I don’t have a reference video?",
+    a: "Start from one of the built-in looks, or point at any public reel whose style you like. Halfheaven takes the style, never the content.",
+  },
+  {
+    q: "Who owns my videos?",
+    a: "You do. Your footage and your edits are yours. We never publish or share them, and we’ll ask before using anything to improve the product.",
+  },
+  {
+    q: "When does it launch?",
+    a: "We’re letting waitlist members in batch by batch. Join and you’ll hear from us first, with your early-access price locked in.",
+  },
+];
 
-  // ---- behind Edit -------------------------------------------------------
-  const [msgs, setMsgs] = useState<Msg[]>([HELLO]);
-  const [draft, setDraft] = useState("");
-  const [thinking, setThinking] = useState(false);
-  const [looks, setLooks] = useState<{ id: string; label: string; blurb: string }[]>([]);
-  const looksAsked = useRef(false);
-  const [look, setLook] = useState("");
-  const [styling, setStyling] = useState(false);
-  const [track, setTrack] = useState("");
-  const [mixing, setMixing] = useState(false);
-  const [score, setScore] = useState<Score | null>(null);
-  const [scoring, setScoring] = useState(false);
-  const [scoreError, setScoreError] = useState("");
+// ---- the hero's phones ------------------------------------------------------
 
-  const screenRef = useRef<HTMLDivElement>(null);
-  const beforeRef = useRef<HTMLVideoElement>(null);
-  const afterRef = useRef<HTMLVideoElement>(null);
-  const logRef = useRef<HTMLDivElement>(null);
-  const musicInput = useRef<HTMLInputElement>(null);
-
-  useEffect(() => { fetch("/api/styles").then(r => r.json()).then(d => setStyles(d.styles ?? [])); }, []);
-
-  // The look catalogue is read from the renderer, which costs a Python start,
-  // so it is only asked for once someone opens Edit.
-  useEffect(() => {
-    if (panel !== "edit" || looksAsked.current) return;
-    looksAsked.current = true;
-    fetch("/api/looks").then(r => r.json()).then(d => setLooks(d.looks ?? []));
-  }, [panel]);
-
-  useEffect(() => { logRef.current?.scrollTo({ top: 1e6, behavior: "smooth" }); }, [msgs, thinking]);
-
-  useEffect(() => {
-    if (!menu) return;
-    const close = (e: KeyboardEvent) => { if (e.key === "Escape") setMenu(false); };
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [menu]);
-
-  // ---- polling -----------------------------------------------------------
-  // Keyed on the id rather than the whole reading, so each poll result does not
-  // restart the clock and leave the seconds counter running slow.
-  const readId = read?.id;
-  const readRunning = read?.status === "running";
-  useEffect(() => {
-    if (!readRunning || !readId) return;
-    const tick = setInterval(() => setElapsed(e => e + 1), 1000);
-    const poll = readId === "…" ? undefined : setInterval(async () => {
-      const r = await fetch(`/api/fingerprint/${readId}`);
-      if (!r.ok) return;
-      const next: Read = await r.json();
-      setRead(cur => (cur?.id === next.id ? next : cur));
-    }, 1200);
-    return () => { clearInterval(tick); clearInterval(poll); };
-  }, [readId, readRunning]);
-
-  useEffect(() => {
-    if (job?.status !== "running" || job.id === "…") return;
-    const t = setInterval(async () => {
-      const r = await fetch(`/api/jobs/${job.id}`);
-      if (!r.ok) return;
-      const next: Job = await r.json();
-      if (next.status === "done") lastGood.current = next;
-      if (next.status === "error" && lastGood.current) {
-        // A tweak that fails shouldn't cost the edit it was tweaking.
-        setJob(lastGood.current);
-        setMsgs(m => [...m, { who: "bot", text: `That change didn't render, so I kept the last version. ${next.error ?? ""}`.trim() }]);
-        return;
-      }
-      setJob(next);
-    }, 900);
-    return () => clearInterval(t);
-  }, [job]);
-
-  // ---- choosing the look -------------------------------------------------
-  const readReference = useCallback(async (file: File) => {
-    const mine = ++readSeq.current;
-    setRefFile(file); setPreset(null); setPresets(false); setElapsed(0);
-    setRead({ id: "…", status: "running", name: file.name, videoPath: "" });
-    const form = new FormData();
-    form.set("reference", file);
-    try {
-      const res = await fetch("/api/fingerprint", { method: "POST", body: form });
-      const data = await res.json();
-      if (mine !== readSeq.current) return;
-      setRead(data.id
-        ? { id: data.id, status: "running", name: file.name, videoPath: "" }
-        : { id: "—", status: "error", name: file.name, videoPath: "", error: data.error });
-    } catch {
-      if (mine === readSeq.current) {
-        setRead({ id: "—", status: "error", name: file.name, videoPath: "",
-                  error: "The upload didn't go through. Give it another go." });
-      }
-    }
-  }, []);
-
-  const choosePreset = (s: Style) => {
-    readSeq.current++;
-    setPreset(s); setRead(null); setRefFile(null);
-  };
-
-  // ---- making the edit ---------------------------------------------------
-  // Every run - the first and each chat tweak - sends the same look. A tweak
-  // that forgot the reel would quietly re-render against a built-in look.
-  const start = useCallback(async (patch: Record<string, unknown>) => {
-    if (!targets.length) return;
-    const fd = new FormData();
-    for (const f of targets) fd.append("target", f);
-    if (read?.status === "done") {
-      fd.set("referencePath", read.videoPath);
-      fd.set("referenceName", read.name);
-    } else if (preset) {
-      fd.set("styleId", preset.id);
-    } else return;
-    fd.set("overrides", JSON.stringify(patch));
-
-    const name = targets.length > 1 ? `${targets.length} takes` : targets[0].name;
-    setScore(null); setScoreError(""); setUploaded(0);
-    setJob({ id: "…", status: "running", stageIndex: -1, progress: 0.02, targetName: name });
-    const d = await new Promise<{ id?: string; error?: string }>(res => {
-      const x = new XMLHttpRequest();
-      x.open("POST", "/api/jobs");
-      x.upload.onprogress = e => e.lengthComputable && setUploaded(e.loaded / e.total);
-      x.onload = () => { try { res(JSON.parse(x.responseText || "{}")); } catch { res({ error: "The server didn't answer properly." }); } };
-      x.onerror = () => res({ error: "The upload didn't go through. Give it another go." });
-      x.send(fd);
-    });
-    if (d.id) {
-      setJob({ id: d.id, status: "running", stageIndex: 0, progress: 0.08, targetName: name });
-    } else if (lastGood.current) {
-      setJob(lastGood.current);
-      setMsgs(m => [...m, { who: "bot", text: d.error ?? "That didn't go through." }]);
-    } else {
-      setJob({ id: "—", status: "error", stageIndex: 0, progress: 0, targetName: name, error: d.error });
-    }
-  }, [targets, read, preset]);
-
-  const startOver = () => {
-    readSeq.current++;
-    lastGood.current = null;
-    setJob(null); setRead(null); setRefFile(null); setPreset(null); setPresets(false); setTargets([]);
-    setOverrides({}); setMsgs([HELLO]); setPanel(null); setTab("ask"); setCompare(false);
-    setScore(null); setScoreError(""); setTrack(""); setLook(""); setSound(false); setMenu(false);
-  };
-
-  // ---- behind Edit -------------------------------------------------------
-  /** Caption fixes, looks and music re-render in place: same job, new file. */
-  const rerendered = () => { setVideoKey(k => k + 1); setScore(null); };
-
-  const say = useCallback(async (text: string) => {
-    // Enter still reaches here while a re-run is going; a second would race it.
-    if (!text.trim() || thinking || job?.status === "running") return;
-    setMsgs(m => [...m, { who: "me", text }]); setDraft(""); setThinking(true);
-    try {
-      const r = await fetch("/api/chat", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message: text, profile: job?.profile }),
-      });
-      const d = await r.json();
-      const merged = { ...overrides, ...d.overrides };
-      setOverrides(merged);
-      setMsgs(m => [...m, { who: "bot", text: d.reply, changed: d.changed }]);
-      if (Object.keys(d.overrides ?? {}).length) start(merged);
-    } finally { setThinking(false); }
-  }, [thinking, job, overrides, start]);
-
-  const chooseLook = async (id: string) => {
-    if (!job) return;
-    setLook(id); setStyling(true);
-    try {
-      await fetch(`/api/jobs/${job.id}/look`, {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ preset: id }),
-      });
-      rerendered();
-    } finally { setStyling(false); }
-  };
-
-  const setMusic = async (file: File | null) => {
-    if (!job) return;
-    setMixing(true);
-    try {
-      const fd = new FormData();
-      if (file) fd.set("track", file); else fd.set("remove", "1");
-      const r = await fetch(`/api/jobs/${job.id}/music`, { method: "POST", body: fd });
-      if ((await r.json()).ok) { setTrack(file ? file.name : ""); rerendered(); }
-    } finally { setMixing(false); }
-  };
-
-  const runScore = async () => {
-    setPanel("score");
-    if (!job || job.status !== "done" || score || scoring) return;
-    setScoring(true); setScoreError("");
-    try {
-      const res = await fetch("/api/score", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ jobId: job.id }),
-      });
-      const data = await res.json();
-      if (data.error) setScoreError(data.error); else setScore(data);
-    } catch {
-      setScoreError("Couldn't reach the scorer. Try again in a moment.");
-    } finally { setScoring(false); }
-  };
-
-  /* the edited cut runs ahead of the source, so map program time back */
-  const sync = () => {
-    const b = beforeRef.current, a = afterRef.current;
-    if (!b || !a) return;
-    let want = a.currentTime;
-    const clips = job?.clips;
-    if (clips?.length) {
-      let at = 0; want = clips[clips.length - 1].end;
-      for (const c of clips) {
-        const d = c.end - c.start;
-        if (a.currentTime < at + d) { want = c.start + (a.currentTime - at); break; }
-        at += d;
-      }
-    }
-    if (Math.abs(b.currentTime - want) > 0.12) b.currentTime = want;
-  };
-
-  const drag = (e: React.PointerEvent) => {
-    if (e.buttons === 0 && e.type !== "pointerdown") return;
-    const r = screenRef.current?.getBoundingClientRect(); if (!r) return;
-    setSplit(Math.max(2, Math.min(98, ((e.clientX - r.left) / r.width) * 100)));
-  };
-
-  const fp = read?.status === "done" ? read.fingerprint : undefined;
-  const lookReady = read?.status === "done" || !!preset;
-  const lookName = preset?.name ?? read?.name ?? "";
-
-  // ======================================================================
-  // Before anything is made: two slots and one button.
-  // ======================================================================
-  if (!job) {
-    const hint = read?.status === "running"
-      ? targets.length ? "Still reading the reel — nearly there." : "Reading the reel. Drop your footage meanwhile."
-      : !lookReady
-        ? presets
-          ? targets.length ? "Now pick a look." : "Pick a look and drop your footage."
-          : targets.length ? "Now point at a reel you want to look like." : "Needs a reel to copy and some footage of your own."
-        : !targets.length ? "Now drop your own footage." : "";
-
-    return (
-      <div className="setup">
-        <div className="setup-top">
-          <span className="logo"><span className="dot">H</span><span className="name">Halfheaven</span></span>
-          <ThemeToggle />
-        </div>
-        <div className="setup-inner">
-          <h1 className="display hero">Give your footage<br />someone else&apos;s edit.</h1>
-          <p className="lede">Drop a reel whose editing you like, then your own clips. We&apos;ll cut yours the same way.</p>
-
-          <div className="pair">
-            {presets ? (
-              <div className="tile">
-                <span className="tile-k">Pick a look</span>
-                <div className="presets">
-                  {styles.map(s => (
-                    <button key={s.id} className="preset" aria-pressed={preset?.id === s.id}
-                            onClick={() => choosePreset(s)}>{s.name}</button>
-                  ))}
-                </div>
-                <button className="ln" onClick={() => { setPresets(false); setPreset(null); }}>
-                  or drop a reel instead
-                </button>
-              </div>
-            ) : (
-              <Drop className="tile" onFiles={f => readReference(f[0])}>
-                <span className="tile-k">A reel to copy</span>
-                <span className="tile-t">{refFile ? refFile.name : "Drop an edited reel"}</span>
-                {read?.status === "running" ? <span className="tile-s busy">Reading… {elapsed}s</span>
-                  : read?.status === "done" ? <span className="tile-s good">Read ✓</span>
-                  : read?.status === "error" ? <span className="tile-s bad">{read.error}</span>
-                  : <span className="tile-s">Someone else&apos;s finished video</span>}
-              </Drop>
-            )}
-
-            <Drop className="tile" multiple onFiles={setTargets}>
-              <span className="tile-k">Your footage</span>
-              <span className="tile-t">
-                {targets.length > 1 ? `${targets.length} takes` : targets[0]?.name ?? "Drop your clips"}
-              </span>
-              {targets.length
-                ? <span className="tile-s good">{mb(targets)} · ready ✓</span>
-                : <span className="tile-s">One take or several — it needs sound</span>}
-            </Drop>
-          </div>
-
-          <button className="btn primary go" disabled={!lookReady || !targets.length} onClick={() => start({})}>
-            Edit it like that
-          </button>
-          {/* Say which half is missing rather than leaving a dead button. */}
-          <p className="hint">{hint || " "}</p>
-          {!presets && !refFile && styles.length > 0 && (
-            <button className="ln" onClick={() => setPresets(true)}>No reel? Use a preset look</button>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  // ======================================================================
-  // The edit, with everything else one click away.
-  // ======================================================================
-  const running = job.status === "running";
-  const done = job.status === "done";
-  // Comparing against the source only lines up for a single take.
-  const comparing = compare && targets.length === 1;
-  const r = job.receipt;
-  const saved = r ? Math.max(0, r.sourceSeconds - r.outputSeconds) : 0;
-  const facts = r ? [
-    saved >= 1 && `${saved.toFixed(0)}s shorter`,
-    r.captions > 0 && `${r.captions} captions`,
-    r.wordsCut > 0 && `${r.wordsCut} stumbles cut`,
-  ].filter(Boolean).join(" · ") : "";
-  const pick = (next: Panel) => { setPanel(p => (p === next ? null : next)); setMenu(false); };
-
+function Phone({ tone, line, word }: { tone: string; line: string; word: string }) {
   return (
-    <div className="studio">
-      <header className="top">
-        <span className="logo"><span className="dot">H</span><span className="name">Halfheaven</span></span>
-        <span className="what" title={`${lookName} → ${job.targetName}`}>
-          {lookName} <span aria-hidden>→</span> {job.targetName}
-        </span>
-        <span className="spacer" />
-        {(done || panel === "edit") && (
-          <button className="btn sm" aria-pressed={panel === "edit"} onClick={() => pick("edit")}>Edit</button>
-        )}
-        {done && (
-          <a className="btn primary sm" href={`/api/jobs/${job.id}/media?v=after`} download={`edit-${job.id}.mp4`}>
-            Save video
-          </a>
-        )}
-        <ThemeToggle />
-        <div className="menu-wrap">
-          <button className="btn ghost sm more" aria-label="More options" aria-expanded={menu}
-                  onClick={() => setMenu(v => !v)}>⋯</button>
-          {menu && (
-            <>
-              <div className="menu-scrim" onClick={() => setMenu(false)} />
-              <div className="menu" role="menu">
-                {done && targets.length === 1 && (
-                  <button role="menuitemcheckbox" aria-checked={compare}
-                          onClick={() => { setCompare(v => !v); setMenu(false); }}>
-                    Compare with original{compare ? " ✓" : ""}
-                  </button>
-                )}
-                {fp && <button role="menuitem" onClick={() => pick("read")}>What we read from the reel</button>}
-                {done && <button role="menuitem" onClick={() => { setMenu(false); runScore(); }}>How close did it get?</button>}
-                <button role="menuitem" onClick={startOver}>Start over</button>
-              </div>
-            </>
-          )}
-        </div>
-      </header>
-
-      <div className={`studio-body${panel ? " with-panel" : ""}`}>
-        <main className="stage">
-          <div className="theatre">
-            <div className="screen" ref={screenRef} style={{ ["--split" as string]: `${split}%` }}>
-              {done ? (
-                <>
-                  {comparing && (
-                    <video ref={beforeRef} src={`/api/jobs/${job.id}/media?v=before`} muted loop playsInline autoPlay />
-                  )}
-                  <video ref={afterRef} className={comparing ? "after" : undefined}
-                    src={`/api/jobs/${job.id}/media?v=after&r=${videoKey}`}
-                    muted={!sound} loop playsInline autoPlay
-                    onTimeUpdate={e => { if (comparing) sync(); setPlayhead((e.target as HTMLVideoElement).currentTime); }} />
-                  {comparing && (
-                    <>
-                      <span className="seam" /><span className="grip">↔</span>
-                      <span className="handle" onPointerDown={drag} onPointerMove={drag} />
-                      <span className="tag l">Yours</span>
-                      <span className="tag r">Edited</span>
-                    </>
-                  )}
-                  <button className="sound" aria-pressed={sound} aria-label={sound ? "Mute" : "Turn sound on"}
-                    title={sound ? "Mute" : "Turn sound on"}
-                    onClick={() => { setSound(v => !v); afterRef.current?.play().catch(() => {}); }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden>
-                      <path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor" />
-                      {sound
-                        ? <path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" stroke="currentColor"
-                                strokeWidth="2" fill="none" strokeLinecap="round" />
-                        : <path d="M16 9.5l5 5M21 9.5l-5 5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />}
-                    </svg>
-                  </button>
-                </>
-              ) : (
-                <div className="waiting">
-                  {running ? (
-                    <>
-                      <span className="ring" />
-                      <span className="w-t">
-                        {job.stageIndex < 0 ? `Uploading ${Math.round(uploaded * 100)}%` : DOING[job.stageIndex] ?? "Working"}…
-                      </span>
-                      <span className="bar">
-                        <i style={{ width: `${Math.round((job.stageIndex < 0 ? uploaded * 0.08 : job.progress) * 100)}%` }} />
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="w-t">That didn&apos;t work</span>
-                      <span className="w-s">{job.error || "Try a different video."}</span>
-                      <button className="btn sm" onClick={() => start(overrides)}>Try again</button>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {panel === "edit" && done && (
-            <Timeline jobId={job.id} at={playhead} version={videoKey}
-              onSeek={t => {
-                if (afterRef.current) afterRef.current.currentTime = t;
-                setPlayhead(t);
-              }} />
-          )}
-
-          <p className="facts">{done ? facts || " " : " "}</p>
-        </main>
-
-        {panel && (
-          <aside className="panel">
-            {panel === "edit" ? (
-              <>
-                <div className="tabs" role="tablist">
-                  <button className="tab" role="tab" aria-selected={tab === "ask"} onClick={() => setTab("ask")}>Ask</button>
-                  <button className="tab" role="tab" aria-selected={tab === "captions"} onClick={() => setTab("captions")}>Captions</button>
-                  <button className="tab" role="tab" aria-selected={tab === "style"} onClick={() => setTab("style")}>Style</button>
-                  <button className="x" aria-label="Close" onClick={() => setPanel(null)}>×</button>
-                </div>
-
-                {tab === "ask" && (
-                  <>
-                    <div className="chat-log" ref={logRef}>
-                      {msgs.map((m, i) => (
-                        <div key={i} className={`msg ${m.who}`}>
-                          <span className="av">{m.who === "me" ? "You" : "H"}</span>
-                          <span>
-                            <span className="bubble" style={{ display: "block" }}>{m.text}</span>
-                            {m.changed && m.changed.length > 0 && (
-                              <span className="did">{m.changed.map(c => <span key={c}>{label(c)}</span>)}</span>
-                            )}
-                          </span>
-                        </div>
-                      ))}
-                      {thinking && (
-                        <div className="msg bot"><span className="av">H</span>
-                          <span className="bubble thinking"><i /><i /><i /></span></div>
-                      )}
-                    </div>
-                    <div className="chat-foot">
-                      <div className="suggest">
-                        {SUGGESTIONS.map(s => (
-                          <button key={s} className="chip" onClick={() => say(s)} disabled={thinking || running}>{s}</button>
-                        ))}
-                      </div>
-                      <div className="composer">
-                        <textarea rows={1} placeholder="Make the captions pop more…" value={draft}
-                          onChange={e => setDraft(e.target.value)}
-                          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); say(draft); } }} />
-                        <button className="send" aria-label="Send" onClick={() => say(draft)}
-                                disabled={!draft.trim() || thinking || running}>↑</button>
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                {tab === "captions" && <CaptionFixer jobId={job.id} ready={done} onApplied={rerendered} />}
-
-                {tab === "style" && (
-                  <div className="panel-scroll">
-                    <div className="block">
-                      <span className="eyebrow">Caption look{styling ? " — applying…" : ""}</span>
-                      {looks.length ? (
-                        <div className="looks-grid">
-                          {looks.map(l => (
-                            <button key={l.id} className="lk" aria-pressed={look === l.id}
-                              disabled={styling || !done} onClick={() => chooseLook(l.id)}>
-                              <span className="n">{l.label}</span>
-                              <span className="b">{l.blurb}</span>
-                            </button>
-                          ))}
-                        </div>
-                      ) : <span className="tiny">Loading looks…</span>}
-                    </div>
-
-                    <div className="block">
-                      <span className="eyebrow">Music{mixing ? " — mixing…" : ""}</span>
-                      <input ref={musicInput} type="file" accept="audio/*" hidden
-                        onChange={e => { setMusic(e.target.files?.[0] ?? null); e.target.value = ""; }} />
-                      {track ? (
-                        <div className="loaded">
-                          <span className="thumb">♪</span>
-                          <span style={{ flex: 1 }}>
-                            <span className="nm" style={{ display: "block" }}>{track}</span>
-                            <span className="tiny">Ducks under your voice</span>
-                          </span>
-                          <button className="btn ghost sm" disabled={mixing} onClick={() => setMusic(null)}>Remove</button>
-                        </div>
-                      ) : (
-                        <button className="drop-zone" disabled={mixing || !done} onClick={() => musicInput.current?.click()}>
-                          <span className="tile-t">Add a track</span>
-                          <span className="tile-s">It ducks under your voice automatically</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </>
-            ) : (
-              <>
-                <div className="panel-head">
-                  <span className="eyebrow">{panel === "read" ? "What we read from the reel" : "How close it got"}</span>
-                  <button className="x" aria-label="Close" onClick={() => setPanel(null)}>×</button>
-                </div>
-                <div className="panel-scroll">
-                  {panel === "read" && fp && <Readout fp={fp} />}
-                  {panel === "score" && (
-                    scoring ? <p className="tiny">Measuring your edit against the reel — this takes a moment.</p>
-                      : scoreError ? <p className="tiny" style={{ color: "var(--bad)" }}>{scoreError}</p>
-                      : score ? <Scorecard score={score} />
-                      : <p className="tiny">Available once the edit is ready.</p>
-                  )}
-                </div>
-              </>
-            )}
-          </aside>
-        )}
+    <div className={s.phone}>
+      <div className={`${s.screen} ${tone}`}>
+        <div className={s.bars}><i className={s.on} /><i className={s.on} /><i /><i /></div>
+        <div className={s.subject} />
+        <p className={s.cap}>{line}<b>{word}</b></p>
       </div>
     </div>
   );
 }
 
-/** Turn a settings path into something a creator recognises. */
-function label(path: string) {
-  const map: Record<string, string> = {
-    "captions.size_pct": "caption size",
-    "captions.anchor": "caption position",
-    "captions.fill_hex": "caption colour",
-    "captions.max_words": "words per line",
-    "captions.all_caps": "capitals",
-    "emphasis.size_pct": "punch size",
-    "trim.aggressiveness": "how much is cut",
-    "trim.max_silence": "pauses",
-    "punch.rate": "how often it zooms",
-    "punch.scale_mean": "zoom amount",
-    "grade.strength": "colour",
-  };
-  return map[path] ?? path.split(".").pop()!;
+/* One reference on the left, then a fanned stack of later videos carrying the
+   same caption treatment over different footage - the product in one picture. */
+function Stage() {
+  return (
+    <div className={s.stage} aria-hidden>
+      <div className={s.col}>
+        <span className={s.phoneLabel}>The one you love</span>
+        <Phone tone={s.toneA} line="building a brand from" word="zero" />
+      </div>
+      <div className={s.bridge}><span><Arrow /></span><em>Same look</em></div>
+      <div className={s.col}>
+        <span className={s.phoneLabel}>Every video after</span>
+        <div className={s.fan}>
+          <Phone tone={s.toneC} line="day 12 of posting" word="daily" />
+          <Phone tone={s.toneB} line="what nobody tells you about" word="pricing" />
+          <Phone tone={s.toneA} line="how I got my first" word="client" />
+        </div>
+        <span className={s.badge}><Check /> Same style, every video</span>
+      </div>
+    </div>
+  );
+}
+
+// ---- the page ---------------------------------------------------------------
+
+export default function Landing() {
+  return (
+    <div className={s.page}>
+      <header className={s.nav}>
+        <div className={`${s.wrap} ${s.navInner}`}>
+          <a href="#top" className={`logo ${s.logoLink}`}>
+            <span className="dot">H</span><span className="name">Halfheaven</span>
+          </a>
+          <nav className={s.navLinks} aria-label="Sections">
+            <a href="#problem">The problem</a>
+            <a href="#how">How it works</a>
+            <a href="#pricing">Pricing</a>
+            <a href="#faq">FAQ</a>
+          </nav>
+          <div className={s.navRight}>
+            <ThemeToggle />
+            <a href="#waitlist" className="btn primary sm">Join waitlist</a>
+          </div>
+        </div>
+      </header>
+
+      <main id="top">
+        <section className={`${s.wrap} ${s.hero}`}>
+          <div>
+            <span className={s.pill}><i>Early access</i> Made for Indian creators</span>
+            <h1 className={s.h1}>Your editor’s style, on <em>every</em> video.</h1>
+            <p className={s.lede}>
+              Get one video edited the way you love. Halfheaven learns that edit (the cuts, the captions, the
+              colour, the pace) and edits every video after it to match, for a fraction of what an editor costs.
+            </p>
+            <div className={s.ctas}>
+              <a href="#waitlist" className="btn primary">Join the waitlist</a>
+              <a href="#how" className="btn">See how it works</a>
+            </div>
+            <p className={s.fine}>Early-access prices locked in for waitlist members. No card needed.</p>
+          </div>
+          <Stage />
+        </section>
+
+        <section id="problem" className={`${s.section} ${s.alt}`}>
+          <div className={s.wrap}>
+            <div className={s.head}>
+              <span className={s.kicker}>The problem</span>
+              <h2 className={s.h2}>Editing is eating your <em>channel</em>.</h2>
+              <p className={s.sub}>
+                Every creator hits the same wall. You pay for editing in rupees or you pay for it in hours. Either
+                way it caps how often you can post, and posting often is the whole game.
+              </p>
+            </div>
+            <div className={s.grid3}>
+              {PAINS.map((p) => (
+                <article key={p.title} className={s.card}>
+                  <span className={s.icon}>{p.icon}</span>
+                  <p className={s.stat}>{p.stat}</p>
+                  <h3>{p.title}</h3>
+                  <p>{p.body}</p>
+                </article>
+              ))}
+            </div>
+            <p className={s.foot}>Rates are typical freelance ranges for short-form editing in India.</p>
+          </div>
+        </section>
+
+        <section className={s.band}>
+          <div className={s.wrap}>
+            <p className={s.bandLine}>The hard part isn’t the first great edit. It’s the <em>fiftieth</em>.</p>
+            <p className={s.bandSub}>Halfheaven makes the fiftieth look exactly like the first.</p>
+          </div>
+        </section>
+
+        <section id="how" className={s.section}>
+          <div className={s.wrap}>
+            <div className={s.head}>
+              <span className={s.kicker}>How it works</span>
+              <h2 className={s.h2}>Edit once. Then just <em>post</em>.</h2>
+              <p className={s.sub}>
+                Halfheaven turns one video you love into a style it can repeat on every video you shoot after it.
+              </p>
+            </div>
+            <ol className={s.steps} style={{ listStyle: "none", margin: 0, padding: 0 }}>
+              {STEPS.map((step, i) => (
+                <li key={step.title} className={s.step}>
+                  <span className={s.num}>0{i + 1}</span>
+                  <h3>{step.title}</h3>
+                  <p>{step.body}</p>
+                </li>
+              ))}
+            </ol>
+            <div className={s.memory}>
+              <span className={s.icon}><Layers /></span>
+              <div>
+                <strong>Your style is saved, not rebuilt.</strong>
+                <p>
+                  Every style you make stays in your account. New videos start from it, so your channel looks
+                  like your channel every time, whoever is or isn’t editing it this month.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="compare" className={`${s.section} ${s.alt}`}>
+          <div className={s.wrap}>
+            <div className={s.head}>
+              <span className={s.kicker}>The choice</span>
+              <h2 className={s.h2}>What you’re really <em>choosing</em> between.</h2>
+              <p className={s.sub}>Every creator already pays for editing, one way or another.</p>
+            </div>
+            <div className={s.tableWrap}>
+              <table className={s.table}>
+                <thead>
+                  <tr>
+                    <th scope="col"><span className="sr-only">Compared on</span></th>
+                    <th scope="col">A freelance editor</th>
+                    <th scope="col">Doing it yourself</th>
+                    <th scope="col" className={s.ours}>Halfheaven</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {COMPARE.map(([row, editor, self, ours]) => (
+                    <tr key={row}>
+                      <th scope="row">{row}</th>
+                      <td data-label="Freelance editor">{editor}</td>
+                      <td data-label="Doing it yourself">{self}</td>
+                      <td data-label="Halfheaven" className={s.ours}>{ours}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section id="india" className={s.section}>
+          <div className={s.wrap}>
+            <div className={s.head}>
+              <span className={s.kicker}>Built for India <span className={s.soon}>Coming at launch</span></span>
+              <h2 className={s.h2}>Made for how India <em>actually</em> posts.</h2>
+              <p className={s.sub}>
+                Most editing tools are built for English-only creators paying in dollars. We’re not.
+              </p>
+            </div>
+            <div className={s.grid4}>
+              {INDIA.map((f) => (
+                <article key={f.title} className={s.feature}>
+                  <p className={s.glyph} aria-hidden>{f.glyph}</p>
+                  <h3>{f.title}</h3>
+                  <p>{f.body}</p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section id="editors" className={`${s.section} ${s.alt}`}>
+          <div className={`${s.wrap} ${s.split}`}>
+            <div className={s.head}>
+              <span className={s.kicker}>For editors and agencies</span>
+              <h2 className={s.h2}>Make the master edit. Let the rest <em>follow</em>.</h2>
+              <p className={s.sub}>
+                Halfheaven doesn’t replace good editors. It multiplies them. Craft a creator’s look once, then take on
+                more clients without taking on more hours.
+              </p>
+              <div className={s.ctas}>
+                <a href="#waitlist" className="btn">Join as an editor</a>
+              </div>
+            </div>
+            <ul className={s.list}>
+              {EDITORS.map((e) => (
+                <li key={e.title}>
+                  <span className={s.tick}><Check /></span>
+                  <div><strong>{e.title}</strong><span>{e.body}</span></div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+
+        <section id="pricing" className={s.section}>
+          <div className={s.wrap}>
+            <div className={s.head}>
+              <span className={s.kicker}>Pricing</span>
+              <h2 className={s.h2}>A month of editing for the price of a <em>reel</em>.</h2>
+              <p className={s.sub}>Early-access prices. Waitlist members lock these in.</p>
+            </div>
+            <div className={s.tiers}>
+              {TIERS.map((t) => (
+                <article key={t.name} className={`${s.tier} ${t.ribbon ? s.featured : ""}`}>
+                  {t.ribbon && <span className={s.ribbon}>{t.ribbon}</span>}
+                  <h3>{t.name}</h3>
+                  <p className={s.for}>{t.for}</p>
+                  <p className={s.price}><strong>{t.price}</strong><span>{t.per}</span></p>
+                  <ul className={s.feats}>
+                    {t.feats.map((f) => <li key={f}><Check /> {f}</li>)}
+                  </ul>
+                  <a href="#waitlist" className={`btn ${t.ribbon ? "primary" : ""} ${s.full}`}>Join the waitlist</a>
+                </article>
+              ))}
+            </div>
+            <p className={s.tiersNote}>Prices in rupees, billed monthly by UPI Autopay or card. GST extra.</p>
+          </div>
+        </section>
+
+        <section id="faq" className={`${s.section} ${s.alt}`}>
+          <div className={`${s.wrap} ${s.faqGrid}`}>
+            <div className={s.head}>
+              <span className={s.kicker}>Questions</span>
+              <h2 className={s.h2}>Before you <em>ask</em>.</h2>
+              <p className={s.sub}>The things creators want to know first.</p>
+            </div>
+            <div className={s.faq}>
+              {FAQS.map((f) => (
+                <details key={f.q}>
+                  <summary>{f.q}</summary>
+                  <p>{f.a}</p>
+                </details>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section id="waitlist" className={`${s.section} ${s.cta}`}>
+          <div className={s.wrap}>
+            <div className={s.ctaCard}>
+              <div>
+                <h2 className={s.h2}>Get your <em>evenings</em> back.</h2>
+                <p className={s.sub}>
+                  Join the waitlist and we’ll let you in batch by batch, with early-access pricing locked in.
+                </p>
+                <ul className={s.perks}>
+                  <li><Check size={16} /> Early-access price, locked in</li>
+                  <li><Check size={16} /> Bring one video you love; we do the rest</li>
+                  <li><Check size={16} /> No card needed to join</li>
+                </ul>
+              </div>
+              <Waitlist />
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer className={s.footer}>
+        <div className={`${s.wrap} ${s.footInner}`}>
+          <span className="logo"><span className="dot">H</span><span className="name">Halfheaven</span></span>
+          <p>© 2026 Halfheaven. Your editor’s style, on every video.</p>
+          <nav className={s.footLinks} aria-label="Footer">
+            <a href="#how">How it works</a>
+            <a href="#pricing">Pricing</a>
+            <a href="#faq">FAQ</a>
+          </nav>
+        </div>
+      </footer>
+    </div>
+  );
 }
