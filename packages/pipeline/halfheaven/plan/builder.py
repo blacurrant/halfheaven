@@ -232,12 +232,10 @@ def build_program(
         )
 
     # How type is used across the edit, when the reference was measured: how
-    # much of the runtime carries it, how often a word turns the accent colour,
-    # and where each card sits. Thinning comes first so the accent rate is
-    # judged on the cards that survive.
+    # often a word turns the accent colour, and where each card sits. Its share
+    # of the runtime is deliberately not copied - matching it meant deleting
+    # cards, and a caption that skips what was said is not a style.
     if profile.type_plan is not None:
-        total = sum(clip.end - clip.start for clip in video)
-        captions = _thin_captions(captions, profile.type_plan.duty_cycle, total)
         captions = _accent_captions(captions, profile.type_plan.accent_rate)
         captions = _place_captions(captions, profile.type_plan, video, profile.captions.size_pct)
 
@@ -275,29 +273,6 @@ FACE_HALF = 0.08
 FACE_BAND_DEFAULT = (0.32, 0.56)
 # A caption line's height as a multiple of its size.
 TYPE_LINE = 1.25
-
-
-def _thin_captions(captions: list[Caption], target: float, total: float) -> list[Caption]:
-    """Drop cards until type is on screen for the reference's share of the runtime.
-
-    Captioning every word is the clearest tell of auto-subtitles; an edited reel
-    leaves much of its runtime clear on purpose. A card carrying a stressed word
-    is always kept - it is one the edit chose - and the rest are dropped evenly
-    rather than in a block, so no stretch goes bare.
-    """
-    shown = sum(caption.duration for caption in captions)
-    if total <= 0 or not captions or shown / total <= target:
-        return captions
-    keep = target * total / shown
-    kept: list[Caption] = []
-    budget = 0.0
-    for caption in captions:
-        budget += keep
-        stressed = any(run.style == EMPHASIS_STYLE for run in caption.runs)
-        if stressed or budget >= 1.0:
-            kept.append(caption)
-            budget -= 1.0
-    return kept
 
 
 def _accent_captions(captions: list[Caption], rate: float) -> list[Caption]:

@@ -9,7 +9,7 @@ from typing import Any
 import requests
 
 from halfheaven.config import Config
-from halfheaven.groq.asr import Transcript, parse_transcript
+from halfheaven.groq.asr import HINGLISH_PROMPT, Transcript, choose_hearing, parse_transcript
 
 
 class GroqError(RuntimeError):
@@ -49,17 +49,23 @@ class GroqClient:
             raise GroqError(f"pinned models no longer on Groq: {missing}")
 
     def transcribe(self, audio: pathlib.Path) -> Transcript:
+        plain = self._transcribe(audio, prompt=None)
+        prompted = self._transcribe(audio, prompt=HINGLISH_PROMPT)
+        return parse_transcript(choose_hearing(plain, prompted, HINGLISH_PROMPT))
+
+    def _transcribe(self, audio: pathlib.Path, prompt: str | None) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "model": self.config.asr_model,
+            "response_format": "verbose_json",
+            "timestamp_granularities[]": ["word", "segment"],
+            "language": "en",
+            "temperature": "0",
+        }
+        if prompt:
+            data["prompt"] = prompt
         with open(audio, "rb") as handle:
-            payload = self._post(
-                "/audio/transcriptions",
-                files={"file": (audio.name, handle)},
-                data={
-                    "model": self.config.asr_model,
-                    "response_format": "verbose_json",
-                    "timestamp_granularities[]": ["word", "segment"],
-                },
-            )
-        return parse_transcript(payload)
+            return self._post("/audio/transcriptions",
+                              files={"file": (audio.name, handle)}, data=data)
 
     def chat_json(
         self,

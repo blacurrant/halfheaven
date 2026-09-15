@@ -23,7 +23,6 @@ from halfheaven.plan.builder import (
     _accent_captions,
     _face_band,
     _place_captions,
-    _thin_captions,
 )
 from halfheaven.plan.typography import GLYPH_TO_SIZE, MIN_DUTY, MIN_SIZE, apply_fingerprint
 from halfheaven.render.caption_frames import CaptionFrame
@@ -109,13 +108,6 @@ def _card(t: float, words: str, stressed: int | None = None, duration: float = 1
     runs = [TextRun(text=word, style=EMPHASIS_STYLE if i == stressed else BODY_STYLE, t=t + 0.1 * i)
             for i, word in enumerate(words.split())]
     return Caption(t=t, duration=duration, runs=runs)
-
-
-def test_thinning_hits_the_reference_share_and_keeps_every_stressed_card():
-    cards = [_card(float(i), "one two three", stressed=0 if i % 5 == 0 else None) for i in range(20)]
-    kept = _thin_captions(cards, target=0.5, total=20.0)
-    assert sum(c.duration for c in kept) / 20.0 == pytest.approx(0.5, abs=0.08)
-    assert {c.t for c in cards if c.runs[0].style == EMPHASIS_STYLE} <= {c.t for c in kept}
 
 
 def test_the_accent_lands_on_the_measured_share_of_cards_and_on_the_longest_word():

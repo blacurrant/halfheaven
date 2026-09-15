@@ -159,6 +159,6 @@ def describe(profile: StyleProfile) -> str:
     line = (f"type: {name(body)} {body.font_weight} at {body.size_pct:.3f}, {body.decor}; "
             f"stressed words in {name(emphasis)} {emphasis.fill_hex}")
     if plan:
-        line += (f"; {plan.placement}, on screen {plan.duty_cycle:.0%}, "
+        line += (f"; {plan.placement}, reference type on screen {plan.duty_cycle:.0%}, "
                  f"accent on {plan.accent_rate:.0%} of cards")
     return line

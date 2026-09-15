@@ -9,7 +9,8 @@ import pytest
 from halfheaven.groq.asr import Transcript
 from halfheaven.models import Word
 from halfheaven.plan.builder import CaptionChunk, Decisions, build_program
-from halfheaven.schemas import Canvas, CaptionProfile, MusicProfile, PunchProfile, SfxProfile, StyleProfile
+from halfheaven.schemas import (Canvas, CaptionProfile, MusicProfile, PunchProfile, SfxProfile,
+                                StyleProfile, TypePlan)
 
 CANVAS = Canvas(width=1080, height=1920, fps=30)
 
@@ -151,3 +152,16 @@ def test_words_without_emphasis_all_use_the_body_style():
 def test_cut_words_never_appear_as_runs():
     program = build(cuts=[(1, 2)], caption_chunks=[CaptionChunk(word_indices=[0, 1, 2])])
     assert [run.text for run in program.captions[0].runs] == ["So", "thing"]
+
+
+def test_every_spoken_word_is_captioned_however_sparse_the_reference_type_is():
+    # A reference with type on screen a third of the time once had two cards in
+    # three deleted, captioning 96 of 239 spoken words mid-sentence. The
+    # reference decides how captions look and where they sit, never which
+    # words get said on screen.
+    profile = StyleProfile(type_plan=TypePlan(duty_cycle=0.35))
+    chunks = [CaptionChunk(word_indices=[i, i + 1, i + 2]) for i in (0, 3, 6)]
+    chunks.append(CaptionChunk(word_indices=[9, 10]))
+    program = build(profile=profile, caption_chunks=chunks)
+    assert [run.text for card in program.captions for run in card.runs] == \
+        [word.text for word in TRANSCRIPT.words]
