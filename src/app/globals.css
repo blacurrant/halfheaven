@@ -1,0 +1,88 @@
+@import "tailwindcss";
+
+@theme {
+  --color-paper: var(--paper);
+  --color-card: var(--card);
+  --color-sunk: var(--sunk);
+  --color-raised: var(--raised);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-line: var(--line);
+  --color-line2: var(--line-2);
+  --color-accent: var(--accent);
+  --color-accent-press: var(--accent-press);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ink: var(--accent-ink);
+  --color-on-accent: var(--on-accent);
+  --color-theatre: var(--theatre);
+}
+
+:root{
+  color-scheme:light;
+  --paper:#EFE5D2;
+  --card:#F7F1E5;
+  --sunk:#E6DBC6;
+  --raised:#FBF7EF;
+  --ink:#574B55;
+  --muted:#665962;
+  --faint:#857880;
+  --line:#DED2BD;
+  --line-2:#CDBFA8;
+  --accent:#C3D3E2;
+  --accent-press:#B1C4D7;
+  --accent-soft:#DDE6EE;
+  --accent-ink:#46607B;
+  --on-accent:#4A3F49;
+  --gold:#7E5C22;
+  --good:#37714F;
+  --good-soft:#E2ECDF;
+  --bad:#9E423E;
+  --theatre:#2E2630;
+  --r:10px;
+  --r-sm:7px;
+  --shadow:0 1px 2px rgba(58,49,57,.08), 0 8px 24px -10px rgba(58,49,57,.28);
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --paper:#221C23;
+  --card:#2A232B;
+  --sunk:#342C35;
+  --raised:#3D343E;
+  --ink:#EFE5D2;
+  --muted:#BDB0B2;
+  --faint:#8E8189;
+  --line:#362E37;
+  --line-2:#574B55;
+  --accent:#C3D3E2;
+  --accent-press:#D5E1EC;
+  --accent-soft:#353846;
+  --accent-ink:#C3D3E2;
+  --on-accent:#2A232B;
+  --gold:#E3C47A;
+  --good:#8CCBA5;
+  --good-soft:#233128;
+  --bad:#E7928A;
+  --theatre:#131015;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 20px -8px rgba(0,0,0,.6);
+}
+
+@layer base {
+  *{ box-sizing:border-box; min-width:0 }
+  html,body{ height:100% }
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:var(--font-ui),ui-sans-serif,system-ui,sans-serif;
+    font-size:14.5px; line-height:1.5; -webkit-font-smoothing:antialiased;
+  }
+  button{ font:inherit; color:inherit; background:none; border:none; padding:0; cursor:pointer }
+  input,textarea{ font:inherit; color:inherit }
+  :focus-visible{ outline:2px solid var(--accent-ink); outline-offset:2px; border-radius:4px }
+  ::selection{ background:var(--accent); color:var(--on-accent) }
+  h1,h2,h3{ margin:0; font-family:var(--font-display),var(--font-ui),sans-serif; letter-spacing:-.015em }
+}
+
+/* keep only tiny utilities that are used as plain class names in JSX for v1 - will be replaced by tailwind in components */
+.display{ font-family:var(--font-display),sans-serif; font-weight:700; letter-spacing:-.02em }
+.tiny{ font-size:12px; color:var(--muted) }
+.eyebrow{ font-size:11.5px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--faint) }
