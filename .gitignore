@@ -17,6 +17,8 @@ node_modules/
 .next/
 out/
 dist/
+*.tsbuildinfo
+next-env.d.ts
 
 # media + job artifacts (never commit video)
 /media/
@@ -31,7 +33,6 @@ dist/
 # os
 .DS_Store
 
-# web app
-/.web-work/
-apps/web/.next/
-apps/web/node_modules/
+# web app (frontend at root after split; backend is ../halfhell)
+.halfhell-work/
+.web-work/
