@@ -18,6 +18,7 @@ peak memory is bounded by a single clip no matter how long the edit is.
 from __future__ import annotations
 
 import os
+import json
 import math
 import functools
 import pathlib
@@ -34,6 +35,8 @@ PUNCH_SECONDS = 0.5
 # Intermediates are re-encoded once more in the finish pass, so keep them clean.
 SEGMENT_CRF = 16
 OUTPUT_CRF = 20
+# Mattes are resampled and composited, so they are kept close to lossless.
+MASK_CRF = 10
 
 
 # zoompan places its window on whole input pixels, so a slow push visibly steps.
@@ -94,13 +97,13 @@ def _zoompan(scale_to: float, centre: tuple[float, float], canvas: Canvas) -> st
             f":s={canvas.width}x{canvas.height}:fps={canvas.fps}")
 
 
-def build_segment_command(
-    clip: VideoClip,
-    canvas: Canvas,
-    out_path: str | pathlib.Path,
-    with_audio: bool,
-) -> list[str]:
-    """Render one clip. Exactly one input, so memory is bounded by one clip."""
+def _geometry(clip: VideoClip, canvas: Canvas) -> list[str]:
+    """The filters that frame a clip: cover, crop onto the subject, rate, punch-in.
+
+    Computed from the footage's own size, so a matte of that footage - at any
+    resolution, as long as the aspect matches - is scaled to the same cover and
+    lands on the same pixels.
+    """
     width, height, fps = canvas.width, canvas.height, canvas.fps
 
     # Cover the canvas, then take a canvas-sized window centred on the subject.
@@ -126,7 +129,17 @@ def build_segment_command(
         if PUNCH_UPSCALE > 1:
             filters.append(f"scale={width * PUNCH_UPSCALE}:{height * PUNCH_UPSCALE}")
         filters.append(_zoompan(clip.scale_to, (inside_x, inside_y), canvas))
-    filters += ["setsar=1", "format=yuv420p"]
+    return filters
+
+
+def build_segment_command(
+    clip: VideoClip,
+    canvas: Canvas,
+    out_path: str | pathlib.Path,
+    with_audio: bool,
+) -> list[str]:
+    """Render one clip. Exactly one input, so memory is bounded by one clip."""
+    filters = _geometry(clip, canvas) + ["setsar=1", "format=yuv420p"]
 
     command = [
         ffmpeg(), "-v", "error", "-y",
@@ -145,14 +158,81 @@ def build_segment_command(
     return command
 
 
+def build_mask_segment_command(
+    clip: VideoClip,
+    mask_src: str | pathlib.Path,
+    canvas: Canvas,
+    out_path: str | pathlib.Path,
+) -> list[str]:
+    """Cut a take's matte exactly as `clip` cuts the take: same span, crop and zoom."""
+    filters = _geometry(clip, canvas) + ["setsar=1", "format=gray"]
+    return [
+        ffmpeg(), "-v", "error", "-y",
+        "-ss", f"{clip.start:.4f}", "-to", f"{clip.end:.4f}", "-i", str(mask_src),
+        "-vf", ",".join(filters), "-an",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", str(MASK_CRF), "-pix_fmt", "gray",
+        "-fps_mode", "cfr", "-video_track_timescale", "90000",
+        str(out_path),
+    ]
+
+
+def mask_track(program: EditProgram, kind: str, work_dir: str | pathlib.Path) -> pathlib.Path | None:
+    """One of the takes' mattes ("subject" or "skin") cut into the program timeline.
+
+    None unless every clip's take has that matte on disk: a matte missing for
+    one clip would leave the effect on some shots and not others, which reads
+    as a fault rather than a style. Reused when nothing it depends on changed,
+    because the planner reads the subject track before the render does.
+    """
+    mattes = program.look.mattes
+    sources: list[str] = []
+    for clip in program.video:
+        matte = mattes.get(clip.src)
+        source = getattr(matte, kind, None) if matte else None
+        if not source or not os.path.exists(source):
+            return None
+        sources.append(source)
+
+    work_dir = pathlib.Path(work_dir).resolve()
+    track = work_dir / f"{kind}_track.mp4"
+    stamp = work_dir / f"{kind}_track.json"
+    key = json.dumps({
+        "canvas": program.canvas.model_dump(),
+        "clips": [clip.model_dump() for clip in program.video],
+        "sources": [(s, os.path.getmtime(s)) for s in sources],
+    }, sort_keys=True)
+    if track.exists() and stamp.exists() and stamp.read_text() == key:
+        return track
+
+    pieces_dir = work_dir / f"{kind}_segments"
+    pieces_dir.mkdir(parents=True, exist_ok=True)
+    pieces: list[pathlib.Path] = []
+    for index, (clip, source) in enumerate(zip(program.video, sources)):
+        piece = pieces_dir / f"seg_{index:04d}.mp4"
+        _run(build_mask_segment_command(clip, source, program.canvas, piece), f"{kind} matte {index}")
+        pieces.append(piece)
+    listing = work_dir / f"{kind}_segments.txt"
+    listing.write_text("\n".join(f"file '{p.resolve()}'" for p in pieces) + "\n")
+    _run([ffmpeg(), "-v", "error", "-y", "-f", "concat", "-safe", "0",
+          "-i", str(listing), "-c", "copy", str(track)], f"{kind} matte concat")
+    stamp.write_text(key)
+    return track
+
+
 def build_finish_command(
     program: EditProgram,
     base_path: str | pathlib.Path,
     out_path: str | pathlib.Path,
     work_dir: str | pathlib.Path,
     has_speech: bool | None = None,
+    subject_track: str | pathlib.Path | None = None,
+    skin_track: str | pathlib.Path | None = None,
 ) -> list[str]:
-    """Grade, letterbox and captions in one pass over the joined video."""
+    """Grade, letterbox and captions in one pass over the joined video.
+
+    `subject_track` and `skin_track` are mattes already on the program
+    timeline (see `mask_track`); `look.matte` stands in for a missing subject.
+    """
     canvas = program.canvas
     width, height = canvas.width, canvas.height
     look = program.look
@@ -160,6 +240,7 @@ def build_finish_command(
     top_px = int(round(look.letterbox_top_pct * height))
     bottom_px = int(round(look.letterbox_bottom_pct * height))
     content_h = max(2, height - top_px - bottom_px)
+    letterbox = f"scale={width}:{content_h},pad={width}:{height}:0:{top_px}:black"
 
     inputs = ["-i", str(base_path)]
     # Counted explicitly: a concat input contributes four argv elements, not
@@ -168,41 +249,86 @@ def build_finish_command(
     steps: list[str] = []
     label = "[0:v]"
 
+    def add_input(*args: str, kind: str = "v") -> str:
+        nonlocal input_count
+        inputs.extend(args)
+        stream = f"[{input_count}:{kind}]"
+        input_count += 1
+        return stream
+
     if look.lut:
         # Grade before letterboxing so the bars stay pure black, and before the
         # captions so they keep the exact colour the profile asked for.
-        steps.append(f"{label}lut3d=file='{look.lut}':interp=tetrahedral[vg]")
-        label = "[vg]"
-    if look.is_letterboxed:
-        steps.append(
-            f"{label}scale={width}:{content_h},pad={width}:{height}:0:{top_px}:black[vp]"
-        )
-        label = "[vp]"
-    caption_stream: str | None = None
-    if program.captions:
-        # One caption track, one overlay: constant cost in the caption count.
-        listing = build_caption_track(program, work_dir)
-        inputs += ["-f", "concat", "-safe", "0", "-i", str(listing)]
-        caption_stream = f"[{input_count}:v]"
-        input_count += 1
-
-    if look.matte:
-        # Split the picture: one copy takes the caption, the other becomes the
-        # cut-out subject that is laid back on top. That ordering is the effect.
-        inputs += ["-i", str(look.matte)]
-        matte_stream = f"[{input_count}:v]"
-        input_count += 1
-        steps.append(f"{label}split=2[bg][fg]")
-        if caption_stream:
-            steps.append(f"[bg]{caption_stream}overlay=0:0:eof_action=pass[withcap]")
-            under = "[withcap]"
+        lut = f"lut3d=file='{look.lut}':interp=tetrahedral"
+        if skin_track and look.skin_protect > 0:
+            # The graded picture is laid over the ungraded one with the skin
+            # matte as its (inverted) alpha: everything takes the full grade,
+            # skin takes `1 - skin_protect` of it.
+            skin = add_input("-i", str(skin_track))
+            steps.append(f"{label}split=2[ungraded][tograde]")
+            steps.append(f"[tograde]{lut},format=yuva420p[graded]")
+            steps.append(f"{skin}format=gray,lut=c0='255-val*{look.skin_protect:.3f}'[gradeweight]")
+            steps.append("[graded][gradeweight]alphamerge[gradedskin]")
+            steps.append("[ungraded][gradedskin]overlay=0:0[vg]")
         else:
-            under = "[bg]"
-        steps.append(f"[fg]format=yuva420p[fga]")
-        steps.append(f"[fga]{matte_stream}alphamerge[subject]")
-        steps.append(f"{under}[subject]overlay=0:0:eof_action=pass[vc]")
-        label = "[vc]"
-    elif caption_stream:
+            steps.append(f"{label}{lut}[vg]")
+        label = "[vg]"
+    subject = subject_track or look.matte
+    behind = subject is not None and any(c.behind for c in program.captions)
+    replace = subject is not None and look.background_hex is not None
+    mattes: list[str] = []
+    if behind or replace:
+        # One read of the matte, split between the uses that need it.
+        uses = int(behind) + int(replace)
+        matte = add_input("-i", str(subject))
+        if uses > 1:
+            steps.append(f"{matte}split={uses}" + "".join(f"[matte{k}]" for k in range(uses)))
+            mattes = [f"[matte{k}]" for k in range(uses)]
+        else:
+            mattes = [matte]
+
+    if replace:
+        # After the grade, so the plate is exactly the colour asked for; before
+        # the letterbox, so the bars stay black.
+        plate = look.background_hex.lstrip("#")
+        steps.append(f"{label}split=2[plate][person]")
+        steps.append(f"[plate]drawbox=c=0x{plate}@1:t=fill[platefill]")
+        steps.append("[person]format=yuva420p[persona]")
+        steps.append(f"[persona]{mattes.pop(0)}alphamerge[cutout]")
+        steps.append("[platefill][cutout]overlay=0:0:eof_action=pass[vr]")
+        label = "[vr]"
+
+    if look.is_letterboxed:
+        steps.append(f"{label}{letterbox}[vp]")
+        label = "[vp]"
+
+    if behind:
+        # Three layers: captions marked behind, the subject cut out of the
+        # picture and laid back on top of them, then every other caption.
+        behind_stream = add_input("-f", "concat", "-safe", "0", "-i",
+                                  str(build_caption_track(program, work_dir, layer="behind")))
+        front_stream = None
+        if any(not c.behind for c in program.captions):
+            front_stream = add_input("-f", "concat", "-safe", "0", "-i",
+                                     str(build_caption_track(program, work_dir, layer="front")))
+        matte = mattes.pop(0)
+        if look.is_letterboxed:
+            # the matte follows the picture into the letterbox
+            steps.append(f"{matte}{letterbox}[matteboxed]")
+            matte = "[matteboxed]"
+        steps.append(f"{label}split=2[bg][fg]")
+        steps.append(f"[bg]{behind_stream}overlay=0:0:eof_action=pass[withcap]")
+        steps.append("[fg]format=yuva420p[fga]")
+        steps.append(f"[fga]{matte}alphamerge[subject]")
+        steps.append("[withcap][subject]overlay=0:0:eof_action=pass[vs]")
+        label = "[vs]"
+        if front_stream:
+            steps.append(f"{label}{front_stream}overlay=0:0:eof_action=pass[vc]")
+            label = "[vc]"
+    elif program.captions:
+        # One caption track, one overlay: constant cost in the caption count.
+        caption_stream = add_input("-f", "concat", "-safe", "0", "-i",
+                                   str(build_caption_track(program, work_dir)))
         steps.append(f"{label}{caption_stream}overlay=0:0:eof_action=pass[vc]")
         label = "[vc]"
 
@@ -217,9 +343,7 @@ def build_finish_command(
         has_speech = probe(base_path).has_audio if os.path.exists(base_path) else True
 
     if music and os.path.exists(music.src):
-        inputs += ["-stream_loop", "-1", "-i", str(music.src)]
-        bed = f"[{input_count}:a]"
-        input_count += 1
+        bed = add_input("-stream_loop", "-1", "-i", str(music.src), kind="a")
         steps.append(
             f"{bed}volume={music.gain_db:.1f}dB,"
             f"aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[bed]"
@@ -305,5 +429,10 @@ def render(
         "concat",
     )
 
-    _run(build_finish_command(program, base, out_path, work_dir, with_audio), "finish")
+    look = program.look
+    needs_subject = look.background_hex is not None or any(c.behind for c in program.captions)
+    subject = mask_track(program, "subject", work_dir) if needs_subject else None
+    skin = mask_track(program, "skin", work_dir) if look.lut and look.skin_protect > 0 else None
+    _run(build_finish_command(program, base, out_path, work_dir, with_audio,
+                              subject_track=subject, skin_track=skin), "finish")
     return out_path

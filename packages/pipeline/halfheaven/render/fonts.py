@@ -268,3 +268,34 @@ def load_face(file: str, size: int, weight: int = DEFAULT_WEIGHT) -> ImageFont.F
     font = ImageFont.truetype(str(path), size)
     _apply_weight(font, weight)
     return font
+
+
+def weight_range(file: str) -> tuple[int, int] | None:
+    """The weights a face can be set at, or None for a static face (one weight)."""
+    try:
+        axes = ImageFont.truetype(str(ASSET_DIR / file), 20).get_variation_axes()
+    except (OSError, AttributeError, ValueError):
+        return None
+    for axis in axes or []:
+        name = axis.get("name") if isinstance(axis, dict) else None
+        name = name.decode() if isinstance(name, bytes) else name
+        if name and "weight" in name.lower():
+            return int(axis.get("minimum", 100)), int(axis.get("maximum", 900))
+    return None
+
+
+def catalogue() -> list[dict]:
+    """Every shipped face, as a creator would choose from it."""
+    out = []
+    for face in available():
+        weights = weight_range(face.file)
+        out.append({"file": face.file, "family": face.family, "genre": face.genre,
+                    "italic": face.italic, "caps_only": face.caps_only,
+                    "weights": list(weights) if weights else None})
+    return sorted(out, key=lambda f: (f["genre"], f["family"], f["italic"]))
+
+
+if __name__ == "__main__":
+    import json
+
+    print(json.dumps(catalogue()))

@@ -237,13 +237,21 @@ def render_caption(runs: list[TextRun], canvas: Canvas, styles: dict[str, Captio
                         out_path, styles)
 
 
-def build_caption_track(program, work_dir: str | pathlib.Path) -> pathlib.Path:
+def build_caption_track(program, work_dir: str | pathlib.Path, layer: str = "all") -> pathlib.Path:
     """Write an ffmpeg concat list describing the whole caption track.
 
     Captions never overlap, so the track is one timeline of stills separated by
     transparent gaps. Rendering it as a single input rather than one input per
     caption is what keeps memory constant.
+
+    `layer` keeps only the captions drawn behind the subject ("behind") or in
+    front of it ("front"); each layer writes its own files, so building both
+    never overwrites the other's stills.
     """
+    if layer not in ("all", "front", "behind"):
+        raise ValueError(f"unknown caption layer {layer!r}")
+    chosen = [c for c in program.captions if layer == "all" or c.behind == (layer == "behind")]
+    prefix = "" if layer == "all" else f"{layer}_"
     # Absolute, because the concat demuxer resolves 'file' entries relative to
     # the list file's own directory - a relative work dir would double up.
     work_dir = pathlib.Path(work_dir).resolve()
@@ -257,7 +265,7 @@ def build_caption_track(program, work_dir: str | pathlib.Path) -> pathlib.Path:
 
     spans: list[tuple[pathlib.Path, float]] = []
     cursor = 0.0
-    for index, caption in enumerate(sorted(program.captions, key=lambda c: c.t)):
+    for index, caption in enumerate(sorted(chosen, key=lambda c: c.t)):
         profile = styles.get(caption.style) or _DEFAULT
         start = max(cursor, caption.t)
         if start - cursor > 1e-4:
@@ -267,7 +275,7 @@ def build_caption_track(program, work_dir: str | pathlib.Path) -> pathlib.Path:
             continue
         for order, frame in enumerate(frames):
             card = render_frame(frame, canvas, profile,
-                                work_dir / f"cap_{index:04d}_{order:03d}.png", styles,
+                                work_dir / f"{prefix}cap_{index:04d}_{order:03d}.png", styles,
                                 anchor=caption.anchor)
             spans.append((card, frame.duration))
         cursor = min(program.duration, start + caption.duration)
@@ -285,6 +293,6 @@ def build_caption_track(program, work_dir: str | pathlib.Path) -> pathlib.Path:
     # repeated, which would truncate the last caption.
     lines.append(f"file '{spans[-1][0]}'")
 
-    listing = work_dir / "caption_track.txt"
+    listing = work_dir / ("caption_track.txt" if layer == "all" else f"caption_track_{layer}.txt")
     listing.write_text("\n".join(lines) + "\n")
     return listing

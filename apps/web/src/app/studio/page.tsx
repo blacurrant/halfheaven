@@ -12,17 +12,23 @@
  * Reading the reel starts the moment it is dropped. That work depends only on
  * the reel and takes about a third of its length, which is time the user
  * spends finding their own footage anyway.
+ *
+ * A refresh lands back on the same edit: what the page knows is remembered in
+ * this browser (see lib/remember), and the footage stays on the server, so a
+ * re-run after a refresh does not need the files dropped again.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import CaptionFixer from "@/components/CaptionFixer";
+import TypeControls from "@/components/TypeControls";
 import Drop from "@/components/Drop";
 import Readout from "@/components/Readout";
 import Scorecard from "@/components/Scorecard";
 import ThemeToggle from "@/components/ThemeToggle";
 import Timeline from "@/components/Timeline";
 import type { Fingerprint } from "@/lib/fingerprint";
+import { forgetJob, recall, remember } from "@/lib/remember";
 import type { Score } from "@/lib/score";
 
 type Read = {
@@ -41,6 +47,23 @@ type Job = {
 };
 type Msg = { who: "me" | "bot"; text: string; changed?: string[] };
 type Panel = "edit" | "read" | "score" | null;
+/** Everything a refresh should not cost. */
+type Session = {
+  read: Read | null; preset: Style | null; job: Job | null; lastGood: Job | null;
+  footageJob: string | null; takes: number; overrides: Record<string, unknown>;
+  msgs: Msg[]; look: string; speaker: string; backdrop: string | null; track: string;
+  panel: Panel; tab: Tab; compare: boolean;
+};
+const SESSION = "studio";
+
+// Colours that sit well behind skin: two neutrals, then a few saturated plates.
+const BACKDROPS = ["#111111", "#F4F1EA", "#1E3A8A", "#B91C1C", "#15803D", "#F5B700"];
+
+const SPEAKER_MODES = [
+  { id: "off", label: "As styled", blurb: "Captions sit where the look puts them" },
+  { id: "around", label: "Around you", blurb: "Kept off your face and body" },
+  { id: "behind", label: "Behind you", blurb: "Key words tuck behind your head" },
+];
 type Tab = "ask" | "captions" | "style";
 
 /* What the app is doing, said the way a person would say it. */
@@ -78,6 +101,9 @@ export default function Studio() {
   const [presets, setPresets] = useState(false);  // picking a built-in look instead of a reel
   const [preset, setPreset] = useState<Style | null>(null);
   const [targets, setTargets] = useState<File[]>([]);
+  const [takes, setTakes] = useState(0);          // outlives the files, which a refresh drops
+  // The first job made with this footage. Every re-run reuses what it uploaded.
+  const [footageJob, setFootageJob] = useState<string | null>(null);
 
   // ---- the render --------------------------------------------------------
   const [job, setJob] = useState<Job | null>(null);
@@ -106,6 +132,10 @@ export default function Studio() {
   const looksAsked = useRef(false);
   const [look, setLook] = useState("");
   const [styling, setStyling] = useState(false);
+  const [speaker, setSpeaker] = useState("off");
+  const [placing, setPlacing] = useState(false);
+  const [speakerNote, setSpeakerNote] = useState("");
+  const [backdrop, setBackdrop] = useState<string | null>(null);
   const [track, setTrack] = useState("");
   const [mixing, setMixing] = useState(false);
   const [score, setScore] = useState<Score | null>(null);
@@ -117,6 +147,49 @@ export default function Studio() {
   const afterRef = useRef<HTMLVideoElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const musicInput = useRef<HTMLInputElement>(null);
+
+  // ---- surviving a refresh ----------------------------------------------
+  // Restored after mount rather than in the state initialisers: the server
+  // render has no storage, and the two must agree on the first paint.
+  const [restored, setRestored] = useState(false);
+  const restoredSubject = useRef<string | null>(null);   // the job whose choices were restored
+  useEffect(() => {
+    const s = recall<Session>(SESSION);
+    /* eslint-disable react-hooks/set-state-in-effect -- storage is only readable after mount */
+    if (s) {
+      setRead(s.read); setPreset(s.preset); setJob(s.job); lastGood.current = s.lastGood;
+      setFootageJob(s.footageJob); setTakes(s.takes); setOverrides(s.overrides);
+      setMsgs(s.msgs?.length ? s.msgs : [HELLO]); setLook(s.look);
+      setSpeaker(s.speaker); setBackdrop(s.backdrop); setTrack(s.track);
+      setPanel(s.panel); setTab(s.tab); setCompare(s.compare);
+      restoredSubject.current = s.job?.id ?? null;
+      // The server may have moved on - or lost it - while the page was closed.
+      const id = s.job?.id;
+      if (id && s.job?.status !== "running") {
+        fetch(`/api/jobs/${id}`).then(r => {
+          if (r.status !== 404) return;
+          setJob(j => j?.id === id
+            ? { ...j, status: "error", error: "This edit is no longer on the server. Start over to make it again." }
+            : j);
+        }).catch(() => {});
+      }
+    }
+    setRestored(true);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, []);
+
+  useEffect(() => {
+    if (!restored) return;
+    // "…" is an upload in flight; there is nothing yet the server could answer for.
+    const settled = (j: Job | null) => (j && j.id !== "…" ? j : null);
+    const s: Session = {
+      read: read && read.id !== "…" ? read : null, preset,
+      job: settled(job) ?? settled(lastGood.current), lastGood: lastGood.current,
+      footageJob, takes, overrides, msgs, look, speaker, backdrop, track, panel, tab, compare,
+    };
+    remember(SESSION, s);
+  }, [restored, read, preset, job, footageJob, takes, overrides, msgs, look, speaker, backdrop,
+      track, panel, tab, compare]);
 
   useEffect(() => { fetch("/api/styles").then(r => r.json()).then(d => setStyles(d.styles ?? [])); }, []);
 
@@ -147,6 +220,13 @@ export default function Studio() {
     const tick = setInterval(() => setElapsed(e => e + 1), 1000);
     const poll = readId === "…" ? undefined : setInterval(async () => {
       const r = await fetch(`/api/fingerprint/${readId}`);
+      if (r.status === 404) {
+        // Readings live only as long as the server that ran them.
+        setRead(cur => (cur?.id === readId
+          ? { ...cur, status: "error", error: "That reading was interrupted. Drop the reel again." }
+          : cur));
+        return;
+      }
       if (!r.ok) return;
       const next: Read = await r.json();
       setRead(cur => (cur?.id === next.id ? next : cur));
@@ -158,8 +238,9 @@ export default function Studio() {
     if (job?.status !== "running" || job.id === "…") return;
     const t = setInterval(async () => {
       const r = await fetch(`/api/jobs/${job.id}`);
-      if (!r.ok) return;
-      const next: Job = await r.json();
+      if (!r.ok && r.status !== 404) return;
+      const next: Job = r.ok ? await r.json()
+        : { ...job, status: "error", error: "This edit is no longer on the server." };
       if (next.status === "done") lastGood.current = next;
       if (next.status === "error" && lastGood.current) {
         // A tweak that fails shouldn't cost the edit it was tweaking.
@@ -203,9 +284,10 @@ export default function Studio() {
   // Every run - the first and each chat tweak - sends the same look. A tweak
   // that forgot the reel would quietly re-render against a built-in look.
   const start = useCallback(async (patch: Record<string, unknown>) => {
-    if (!targets.length) return;
+    if (!targets.length && !footageJob) return;
     const fd = new FormData();
-    for (const f of targets) fd.append("target", f);
+    if (footageJob) fd.set("fromJob", footageJob);
+    else for (const f of targets) fd.append("target", f);
     if (read?.status === "done") {
       fd.set("referencePath", read.videoPath);
       fd.set("referenceName", read.name);
@@ -214,7 +296,8 @@ export default function Studio() {
     } else return;
     fd.set("overrides", JSON.stringify(patch));
 
-    const name = targets.length > 1 ? `${targets.length} takes` : targets[0].name;
+    const name = footageJob ? job?.targetName ?? lastGood.current?.targetName ?? ""
+      : targets.length > 1 ? `${targets.length} takes` : targets[0].name;
     setScore(null); setScoreError(""); setUploaded(0);
     setJob({ id: "…", status: "running", stageIndex: -1, progress: 0.02, targetName: name });
     const d = await new Promise<{ id?: string; error?: string }>(res => {
@@ -226,6 +309,7 @@ export default function Studio() {
       x.send(fd);
     });
     if (d.id) {
+      if (!footageJob) { setFootageJob(d.id); setTakes(targets.length); }
       setJob({ id: d.id, status: "running", stageIndex: 0, progress: 0.08, targetName: name });
     } else if (lastGood.current) {
       setJob(lastGood.current);
@@ -233,14 +317,17 @@ export default function Studio() {
     } else {
       setJob({ id: "—", status: "error", stageIndex: 0, progress: 0, targetName: name, error: d.error });
     }
-  }, [targets, read, preset]);
+  }, [targets, footageJob, job, read, preset]);
 
   const startOver = () => {
     readSeq.current++;
+    for (const j of [job, lastGood.current]) if (j) forgetJob(j.id);
     lastGood.current = null;
+    setFootageJob(null); setTakes(0);
     setJob(null); setRead(null); setRefFile(null); setPreset(null); setPresets(false); setTargets([]);
     setOverrides({}); setMsgs([HELLO]); setPanel(null); setTab("ask"); setCompare(false);
     setScore(null); setScoreError(""); setTrack(""); setLook(""); setSound(false); setMenu(false);
+    setSpeaker("off"); setBackdrop(null);
   };
 
   // ---- behind Edit -------------------------------------------------------
@@ -275,6 +362,57 @@ export default function Studio() {
       rerendered();
     } finally { setStyling(false); }
   };
+
+  // Each edit remembers its own mode; a fresh edit starts from what it was made with.
+  useEffect(() => {
+    // Straight after a refresh the remembered choice is newer than the profile,
+    // which still describes the edit as first made.
+    if (restoredSubject.current && restoredSubject.current === job?.id) { restoredSubject.current = null; return; }
+    const subject = (job?.profile as { subject?: { captions?: string; background_hex?: string | null } } | undefined)?.subject;
+    setSpeaker(subject?.captions ?? "off"); setBackdrop(subject?.background_hex ?? null); setSpeakerNote("");
+  }, [job?.id, job?.profile]);
+
+  /** Speaker placement and backdrop share one route: both are a render over
+   *  the separation made with the edit. A failure puts the old choice back. */
+  const applySubject = async (change: { mode?: string; background?: string | null }, undo: () => void) => {
+    if (!job) return;
+    setPlacing(true); setSpeakerNote("");
+    try {
+      const r = await fetch(`/api/jobs/${job.id}/subject`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify(change),
+      });
+      if (r.ok) rerendered();
+      else {
+        undo();
+        setSpeakerNote((await r.json().catch(() => ({}))).error ?? "That didn't apply.");
+      }
+    } finally { setPlacing(false); }
+  };
+  const chooseSpeaker = (mode: string) => {
+    if (mode === speaker) return;
+    const was = speaker;
+    setSpeaker(mode);
+    applySubject({ mode }, () => setSpeaker(was));
+  };
+  const chooseBackdrop = (colour: string | null) => {
+    if (colour === backdrop) return;
+    const was = backdrop;
+    setBackdrop(colour);
+    applySubject({ background: colour }, () => setBackdrop(was));
+  };
+  // A colour picker reports every step of a drag through React's onChange; each
+  // would start a render. The native change event fires once, when it closes.
+  const picker = useRef<HTMLInputElement>(null);
+  const pickLatest = useRef(chooseBackdrop);
+  pickLatest.current = chooseBackdrop;
+  useEffect(() => {
+    const input = picker.current;
+    if (!input) return;
+    const picked = () => pickLatest.current(input.value);
+    input.addEventListener("change", picked);
+    return () => input.removeEventListener("change", picked);
+  }, [panel, tab]);
 
   const setMusic = async (file: File | null) => {
     if (!job) return;
@@ -325,6 +463,8 @@ export default function Studio() {
     const r = screenRef.current?.getBoundingClientRect(); if (!r) return;
     setSplit(Math.max(2, Math.min(98, ((e.clientX - r.left) / r.width) * 100)));
   };
+
+  if (!restored) return null;
 
   const fp = read?.status === "done" ? read.fingerprint : undefined;
   const lookReady = read?.status === "done" || !!preset;
@@ -407,7 +547,7 @@ export default function Studio() {
   const running = job.status === "running";
   const done = job.status === "done";
   // Comparing against the source only lines up for a single take.
-  const comparing = compare && targets.length === 1;
+  const comparing = compare && takes === 1;
   const r = job.receipt;
   const saved = r ? Math.max(0, r.sourceSeconds - r.outputSeconds) : 0;
   const facts = r ? [
@@ -441,7 +581,7 @@ export default function Studio() {
             <>
               <div className="menu-scrim" onClick={() => setMenu(false)} />
               <div className="menu" role="menu">
-                {done && targets.length === 1 && (
+                {done && takes === 1 && (
                   <button role="menuitemcheckbox" aria-checked={compare}
                           onClick={() => { setCompare(v => !v); setMenu(false); }}>
                     Compare with original{compare ? " ✓" : ""}
@@ -505,7 +645,12 @@ export default function Studio() {
                     <>
                       <span className="w-t">That didn&apos;t work</span>
                       <span className="w-s">{job.error || "Try a different video."}</span>
-                      <button className="btn sm" onClick={() => start(overrides)}>Try again</button>
+                      <span className="w-row">
+                        {(footageJob || targets.length > 0) && (
+                          <button className="btn sm" onClick={() => start(overrides)}>Try again</button>
+                        )}
+                        <button className="btn ghost sm" onClick={startOver}>Start over</button>
+                      </span>
                     </>
                   )}
                 </div>
@@ -588,6 +733,45 @@ export default function Studio() {
                           ))}
                         </div>
                       ) : <span className="tiny">Loading looks…</span>}
+                    </div>
+
+                    <div className="block">
+                      <span className="eyebrow">Type</span>
+                      <TypeControls jobId={job.id} ready={done} version={videoKey} onApplied={rerendered} />
+                    </div>
+
+                    <div className="block">
+                      <span className="eyebrow">Captions and you{placing ? " — placing…" : ""}</span>
+                      <div className="looks-grid">
+                        {SPEAKER_MODES.map(m => (
+                          <button key={m.id} className="lk" aria-pressed={speaker === m.id}
+                            disabled={placing || styling || !done} onClick={() => chooseSpeaker(m.id)}>
+                            <span className="n">{m.label}</span>
+                            <span className="b">{m.blurb}</span>
+                          </button>
+                        ))}
+                      </div>
+                      {speakerNote && <span className="tiny">{speakerNote}</span>}
+                    </div>
+
+                    <div className="block">
+                      <span className="eyebrow">Background</span>
+                      <div className="swatches">
+                        <button className="swatch as-shot" aria-pressed={backdrop === null} aria-label="As shot"
+                          title="As shot" disabled={placing || !done} onClick={() => chooseBackdrop(null)} />
+                        {BACKDROPS.map(c => (
+                          <button key={c} className="swatch" style={{ background: c }} aria-label={c} title={c}
+                            aria-pressed={backdrop?.toLowerCase() === c.toLowerCase()}
+                            disabled={placing || !done} onClick={() => chooseBackdrop(c)} />
+                        ))}
+                        <label className="swatch custom" title="Any colour"
+                          aria-pressed={backdrop !== null && !BACKDROPS.some(c => c.toLowerCase() === backdrop.toLowerCase())}
+                          style={backdrop && !BACKDROPS.includes(backdrop) ? { background: backdrop } : undefined}>
+                          <input ref={picker} type="color" aria-label="Any colour" disabled={placing || !done}
+                            defaultValue={backdrop ?? "#ffffff"} />
+                        </label>
+                      </div>
+                      <span className="tiny">{backdrop ? "Everything behind you becomes this colour" : "Your own background, as shot"}</span>
                     </div>
 
                     <div className="block">

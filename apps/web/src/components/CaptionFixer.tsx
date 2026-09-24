@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 
+import { forget, recall, remember } from "@/lib/remember";
+
 type Card = { index: number; t: number; duration: number; words: string[]; emphasis: number[] };
 type Edit = { index: number; text?: string; emphasis?: number[]; delete?: boolean };
 
@@ -25,8 +27,15 @@ export default function CaptionFixer({
   useEffect(() => {
     if (!ready) return;
     fetch(`/api/jobs/${jobId}/captions`).then(r => r.json())
-      .then(d => { if (d.captions) { setCards(d.captions); setEdits({}); } });
+      // Fixes not yet applied survive a refresh; applied ones are in the cards.
+      .then(d => { if (d.captions) { setCards(d.captions); setEdits(recall(`captions.${jobId}`) ?? {}); } });
   }, [jobId, ready]);
+
+  useEffect(() => {
+    if (!cards.length) return;
+    if (Object.keys(edits).length) remember(`captions.${jobId}`, edits);
+    else forget(`captions.${jobId}`);
+  }, [jobId, cards, edits]);
 
   const wordsOf = (c: Card) => (edits[c.index]?.text ?? c.words.join(" ")).split(" ").filter(Boolean);
   const emphOf = (c: Card) => edits[c.index]?.emphasis ?? c.emphasis;

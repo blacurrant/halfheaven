@@ -27,6 +27,8 @@ export type Job = {
   referenceName?: string;
   referencePath?: string;
   targetName: string;
+  /** The staged footage, so a re-run can reuse it instead of uploading again. */
+  targetPaths?: string[];
   startedAt: number;
   finishedAt?: number;
   error?: string;
@@ -50,9 +52,31 @@ export type Receipt = {
 };
 
 const jobs = new Map<string, Job>();
-export const getJob = (id: string) => jobs.get(id);
 export const listJobs = () => [...jobs.values()].sort((a, b) => b.startedAt - a.startedAt);
 export const workDir = (id: string) => path.join(WORKROOT, id);
+
+/** Jobs live in memory while this server runs, and on disk so an edit a page
+ *  reopens after a restart still has its record. */
+export function getJob(id: string): Job | undefined {
+  const live = jobs.get(id);
+  if (live || !/^[\w-]+$/.test(id)) return live;
+  try {
+    const job: Job = JSON.parse(fs.readFileSync(path.join(workDir(id), "job.json"), "utf8"));
+    // Its process died with the server that ran it.
+    if (job.status === "running") {
+      Object.assign(job, { status: "error", error: "The server restarted mid-edit. Try again." });
+    }
+    jobs.set(id, job);
+    return job;
+  } catch { return undefined; }
+}
+
+function saveJob(job: Job) {
+  try {
+    fs.writeFileSync(path.join(workDir(job.id), "job.json"),
+      JSON.stringify({ ...job, log: job.log.slice(-20) }));
+  } catch { /* the in-memory copy still serves this run */ }
+}
 
 /** Where a job's document and output live. The seeded demo points at the
  *  repo's own last render so the studio opens on something real. */
@@ -133,10 +157,12 @@ export async function startJob(opts: {
     referenceName,
     referencePath: reference,
     targetName: opts.targetName,
+    targetPaths: opts.targetPaths,
     startedAt: Date.now(),
     log: [],
   };
   jobs.set(id, job);
+  saveJob(job);
 
   const child = spawn(
     PYTHON,
@@ -173,6 +199,7 @@ export async function startJob(opts: {
       job.status = "error";
       job.error = job.log.filter((l) => /error|Error|Traceback|no audio/i.test(l)).slice(-2).join(" ")
         || `pipeline exited ${code}`;
+      saveJob(job);
       return;
     }
     try {
@@ -204,6 +231,7 @@ export async function startJob(opts: {
       job.status = "error";
       job.error = `finished but produced no readable program: ${(e as Error).message}`;
     }
+    saveJob(job);
   });
 
   return job;

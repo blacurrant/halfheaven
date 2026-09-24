@@ -78,6 +78,12 @@ class Caption(BaseModel):
     anchor: tuple[float, float] = (0.5, 0.72)
     anim: Literal["none", "pop", "fade", "slide"] = "pop"
     emphasis: bool = False
+    # Drawn under the subject rather than over the picture, so the speaker
+    # passes in front of it. Needs a subject matte; without one it is ignored.
+    behind: bool = False
+    # Where the planner put the card before a subject pass moved it, so a
+    # creator who switches that pass off gets the original placement back.
+    home: tuple[float, float] | None = None
 
     @property
     def plain_text(self) -> str:
@@ -112,6 +118,19 @@ class MusicBed(BaseModel):
     duck_release: float = Field(default=0.35, gt=0)
 
 
+class TakeMatte(BaseModel):
+    """Grayscale videos on one take's own frame grid: 255 is the subject.
+
+    Written once per upload and put through the same cuts, crops and zooms as
+    the footage, so they line up with whatever edit is made from the take.
+    """
+
+    subject: str
+    # Face and body skin only. Lets the grade hold back where it would turn
+    # skin a colour no one's skin is.
+    skin: str | None = None
+
+
 class Look(BaseModel):
     """The reference's appearance, applied to the whole program.
 
@@ -122,9 +141,18 @@ class Look(BaseModel):
     lut: str | None = None
     letterbox_top_pct: float = Field(default=0.0, ge=0.0, lt=0.5)
     letterbox_bottom_pct: float = Field(default=0.0, ge=0.0, lt=0.5)
-    # A grayscale video marking the subject. When set, captions are composited
-    # underneath it, so the speaker occludes the text.
+    # A grayscale video marking the subject on the program timeline. Captions
+    # marked `behind` are composited underneath it, so the speaker occludes them.
+    # Usually left empty: the renderer builds it from `mattes`.
     matte: str | None = None
+    # Per-take mattes, keyed by VideoClip.src.
+    mattes: dict[str, TakeMatte] = Field(default_factory=dict)
+    # How much of the grade is held back on skin: 0 grades skin like everything
+    # else, 1 leaves it as shot. Needs a skin matte for every take.
+    skin_protect: float = Field(default=0.0, ge=0.0, le=1.0)
+    # A solid colour to replace everything but the subject with, "#RRGGBB".
+    # Needs a subject matte for every take; without one the picture is kept.
+    background_hex: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
 
     @property
     def is_letterboxed(self) -> bool:
@@ -274,6 +302,24 @@ class FramingProfile(BaseModel):
     letterbox_bottom_pct: float = Field(default=0.0, ge=0.0, lt=0.5)
 
 
+class SubjectProfile(BaseModel):
+    """What separating the speaker from the background is used for.
+
+    Creator choices rather than measurements, which is why they live here as
+    dials an override can turn off.
+    """
+
+    # How captions relate to the speaker. "off": placed as the style says.
+    # "around": moved off the speaker, to the sides or above. "behind": cards
+    # carrying a stressed word tuck behind the speaker's head. Off by default
+    # while creators try both.
+    captions: Literal["off", "around", "behind"] = "off"
+    # Share of the grade held back on skin (see Look.skin_protect).
+    skin_protect: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Replace the background behind the speaker with this colour ("#RRGGBB").
+    background_hex: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+
+
 class TypePlan(BaseModel):
     """How the reference uses type across the edit, beyond how one card looks.
 
@@ -313,6 +359,7 @@ class StyleProfile(BaseModel):
     music: MusicProfile = Field(default_factory=MusicProfile)
     grade: GradeProfile = Field(default_factory=GradeProfile)
     framing: FramingProfile = Field(default_factory=FramingProfile)
+    subject: SubjectProfile = Field(default_factory=SubjectProfile)
     type_plan: TypePlan | None = None
 
 

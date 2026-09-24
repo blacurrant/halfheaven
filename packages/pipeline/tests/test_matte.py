@@ -63,7 +63,7 @@ def program(**overrides):
     base = dict(
         canvas=CANVAS,
         video=[VideoClip(src=str(SOURCE), start=0.0, end=3.0)],
-        captions=[Caption(t=0.0, duration=2.5, text="BEHIND", style="s")],
+        captions=[Caption(t=0.0, duration=2.5, text="BEHIND", style="s", behind=True)],
         styles={"s": CaptionProfile(present=True, anchor=(0.5, 0.75), size_pct=0.1, fill_hex="#FF0000")},
     )
     base.update(overrides)
@@ -95,6 +95,23 @@ def test_the_caption_is_composited_before_the_subject(tmp_path):
 def test_no_matte_means_no_alphamerge(tmp_path):
     command = build_finish_command(program(), tmp_path / "b.mp4", tmp_path / "o.mp4", tmp_path)
     assert "alphamerge" not in graph_of(command)
+
+
+def test_a_matte_leaves_captions_not_marked_behind_in_front(tmp_path):
+    # A matte makes the effect possible; a caption has to ask for it.
+    front = [Caption(t=0.0, duration=2.5, text="FRONT", style="s")]
+    command = build_finish_command(program(captions=front, look=Look(matte="m.mp4")),
+                                   tmp_path / "b.mp4", tmp_path / "o.mp4", tmp_path)
+    assert "alphamerge" not in graph_of(command) and "m.mp4" not in command
+
+
+def test_front_captions_are_composited_over_the_subject(tmp_path):
+    both = [Caption(t=0.0, duration=1.0, text="BEHIND", style="s", behind=True),
+            Caption(t=1.5, duration=1.0, text="FRONT", style="s")]
+    graph = graph_of(build_finish_command(program(captions=both, look=Look(matte="m.mp4")),
+                                          tmp_path / "b.mp4", tmp_path / "o.mp4", tmp_path))
+    assert graph.index("alphamerge") < graph.rindex("overlay=")
+    assert graph.rindex("[vs]") < graph.rindex("overlay="), "front layer must go on last"
 
 
 # --- the effect itself --------------------------------------------------------

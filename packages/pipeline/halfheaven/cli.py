@@ -12,6 +12,7 @@ import json
 import pathlib
 import sys
 
+from halfheaven.analyze.matte import Matting
 from halfheaven.analyze.reference import build_style_profile
 from halfheaven.analyze.fingerprint import extract_fingerprint
 from halfheaven.analyze.subject import locate_subject, needs_reframe
@@ -25,10 +26,11 @@ from halfheaven.plan.chunking import chunk_captions
 from halfheaven.plan.editor import decide
 from halfheaven.plan.reel import Reel
 from halfheaven.plan.overrides import apply_overrides
+from halfheaven.plan.subject_captions import place_around_subject
 from halfheaven.analyze.framing import detect_letterbox
 from halfheaven.analyze.grade import measure_color_stats
 from halfheaven.render.lut import ColorStats, write_lut
-from halfheaven.render.video import render
+from halfheaven.render.video import mask_track, render
 from halfheaven.schemas import Canvas, Look
 
 
@@ -50,6 +52,9 @@ def main(argv: list[str] | None = None) -> int:
 
     work = pathlib.Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
+    # Separating the speaker depends on nothing but the footage, so it starts
+    # first and runs beside reading the reference and transcribing.
+    matting = Matting.start(list(args.target), work / "mattes")
     client = GroqClient()
     client.verify_models()
 
@@ -200,12 +205,28 @@ def main(argv: list[str] | None = None) -> int:
         look = look.model_copy(update={"lut": str(lut)})
         print(f"      grade: target LAB mean={tuple(round(v, 1) for v in target_stats.mean)} "
               f"-> reference, strength {profile.grade.strength}")
+    mattes = matting.result()
+    if mattes:
+        print(f"      subject separated in {matting.seconds:.0f}s "
+              f"(the edit waited {matting.waited:.0f}s for it)")
+        look = look.model_copy(update={
+            "mattes": mattes,
+            "skin_protect": profile.subject.skin_protect if look.lut else 0.0,
+            "background_hex": profile.subject.background_hex,
+        })
+    else:
+        print(f"      no subject separation: {matting.reason}")
     program = program.model_copy(
         update={
             "styles": {"default": profile.captions, "emphasis": profile.emphasis},
             "look": look,
         }
     )
+    mode = profile.subject.captions
+    if mattes and mode != "off" and program.captions:
+        program = place_around_subject(program, mode, mask_track(program, "subject", work))
+        moved = sum(c.home is not None for c in program.captions)
+        print(f"      captions {mode} the speaker: {moved} moved")
     (work / "edit_program.json").write_text(program.model_dump_json(indent=2))
     reveal = sum(1 for c in program.captions if c.reveals_word_by_word)
     stressed = sum(1 for c in program.captions for r in c.runs if r.style == "emphasis")
