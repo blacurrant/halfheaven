@@ -17,6 +17,7 @@ from halfheaven.analyze.reference import build_style_profile
 from halfheaven.analyze.fingerprint import extract_fingerprint
 from halfheaven.analyze.subject import locate_subject, needs_reframe
 from halfheaven.plan.typography import apply_fingerprint, describe
+from halfheaven.groq.align import sharpen
 from halfheaven.groq.asr import Transcript
 from halfheaven.groq.client import GroqClient
 from halfheaven.media.audio import extract_audio
@@ -135,7 +136,8 @@ def main(argv: list[str] | None = None) -> int:
     words: list = []
     elapsed = 0.0
     for index, (take, info) in enumerate(zip(takes, infos)):
-        part = client.transcribe(extract_audio(take, work / f"take_{index}.wav"))
+        audio = extract_audio(take, work / f"take_{index}.wav")
+        part = sharpen(client.transcribe(audio), audio)
         words += [
             dataclasses.replace(w, start=w.start + elapsed, end=w.end + elapsed)
             for w in part.words
