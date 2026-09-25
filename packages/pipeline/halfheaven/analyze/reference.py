@@ -12,6 +12,7 @@ from halfheaven.analyze.framing import detect_letterbox
 from halfheaven.analyze.grade import measure_color_stats
 from halfheaven.analyze.shots import detect_shots, pacing
 from halfheaven.analyze.text_regions import detect_persistent_caption
+from halfheaven.groq.align import sharpen
 from halfheaven.groq.client import GroqClient
 from halfheaven.media.probe import probe
 from halfheaven.render.video import extract_frame
@@ -92,9 +93,8 @@ def build_style_profile(
     # below it, and the tail is deliberate breathing room.
     if info.has_audio and client is not None and work_dir is not None:
         try:
-            reference_words = client.transcribe(
-                extract_audio(video, work_dir / "reference.wav")
-            ).words
+            audio = extract_audio(video, work_dir / "reference.wav")
+            reference_words = sharpen(client.transcribe(audio), audio).words
             gaps = sorted(
                 max(0.0, b.start - a.end)
                 for a, b in zip(reference_words, reference_words[1:])

@@ -22,9 +22,12 @@ ends up confidently applying something it never saw.
 """
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import enum
+import functools
 import pathlib
+import sys
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -824,8 +827,41 @@ class Rhythm:
     driver: Reading                # "speech" or "beat"
 
 
-def _onsets(path: pathlib.Path) -> tuple[np.ndarray, float]:
-    """Onset times and the dominant period, from spectral flux."""
+MIN_BEATS = 4
+
+
+@functools.cache
+def _beat_model():
+    from beat_this.inference import Audio2Beats
+    return Audio2Beats(checkpoint_path="final0", device="cpu", dbn=False)
+
+
+def _beats(samples: np.ndarray, rate: int) -> np.ndarray | None:
+    """Beat times from beat_this, or None when it is not installed or fails.
+
+    Spectral flux peaks on every consonant, so under speech some peak sat near
+    almost any cut. A trained tracker marks only the pulse, and marks none at
+    all when there is no music.
+    """
+    try:
+        import beat_this  # noqa: F401
+    except ImportError:
+        return None
+    try:
+        # Library chatter goes to stderr: the CLI's stdout is JSON.
+        with contextlib.redirect_stdout(sys.stderr):
+            beats, _ = _beat_model()(samples, rate)
+    except Exception as error:
+        print(f"beat tracker failed, using spectral flux: {error}", file=sys.stderr)
+        return None
+    return np.asarray(beats, dtype=float)
+
+
+def _onsets(path: pathlib.Path) -> tuple[np.ndarray, float, bool]:
+    """Beat or onset times, the dominant period, and whether a beat tracker made them.
+
+    Uses beat_this when the `ml` extra is installed, spectral flux otherwise.
+    """
     import subprocess
     import wave
     import tempfile
@@ -838,7 +874,7 @@ def _onsets(path: pathlib.Path) -> tuple[np.ndarray, float]:
                         "-ac", "1", "-ar", "22050", str(wav)],
                        check=True, capture_output=True)
         if not wav.exists():
-            return np.array([]), 0.0
+            return np.array([]), 0.0, False
         with wave.open(str(wav)) as handle:
             rate = handle.getframerate()
             samples = np.frombuffer(handle.readframes(handle.getnframes()),
@@ -846,7 +882,13 @@ def _onsets(path: pathlib.Path) -> tuple[np.ndarray, float]:
 
     window, hop = 1024, 256
     if len(samples) < window * 4:
-        return np.array([]), 0.0
+        return np.array([]), 0.0, False
+    beats = _beats(samples, rate)
+    if beats is not None:
+        # A stray beat or two in speech is not a pulse to cut against.
+        if beats.size < MIN_BEATS:
+            return np.array([]), 0.0, True
+        return beats, float(np.median(np.diff(beats))), True
     spectra = np.array([
         np.abs(np.fft.rfft(samples[i:i + window] * np.hanning(window)))
         for i in range(0, len(samples) - window, hop)
@@ -864,7 +906,7 @@ def _onsets(path: pathlib.Path) -> tuple[np.ndarray, float]:
     lags = np.arange(len(correlation)) * hop / rate
     band = (lags > 0.28) & (lags < 1.2)
     period = float(lags[band][correlation[band].argmax()]) if band.any() else 0.0
-    return np.array(peaks), period
+    return np.array(peaks), period, False
 
 
 def _rhythm(path: pathlib.Path, shots: list[Shot], has_audio: bool) -> Rhythm:
@@ -875,14 +917,34 @@ def _rhythm(path: pathlib.Path, shots: list[Shot], has_audio: bool) -> Rhythm:
         cuts_per_min=Reading(round(measured.cuts_per_min, 1)),
     )
     cuts = np.array([s.start for s in shots[1:]])
-    if not has_audio or cuts.size == 0:
+    if not has_audio:
         return Rhythm(**base,
                       tempo_bpm=Reading.absent("no audio"),
                       on_beat_share=Reading.absent("no audio"),
                       driver=Reading("beat", confidence=Confidence.INFERRED,
                                      note="no audio to cut against"))
 
-    peaks, period = _onsets(path)
+    peaks, period, tracked = _onsets(path)
+    if cuts.size == 0:
+        # One continuous take has no cuts to set against anything. Only a beat
+        # tracker can say whether music is there; flux fires on speech too.
+        music = tracked and peaks.size > 0
+        return Rhythm(**base,
+                      tempo_bpm=(Reading(round(60 / period, 1), confidence=Confidence.INFERRED)
+                                 if music else Reading.absent("no musical beat" if tracked
+                                                              else "no cuts to time")),
+                      on_beat_share=Reading.absent("one continuous take"),
+                      driver=(Reading("speech", confidence=Confidence.INFERRED,
+                                      note="one continuous take with no music")
+                              if tracked and not music
+                              else Reading.absent("one continuous take: no cuts to place")))
+    if peaks.size == 0 and tracked:
+        # A beat tracker finding no pulse means no music: the words drive it.
+        return Rhythm(**base,
+                      tempo_bpm=Reading.absent("no musical beat"),
+                      on_beat_share=Reading.absent("no musical beat"),
+                      driver=Reading("speech", confidence=Confidence.INFERRED,
+                                     note="no musical beat under the cuts"))
     if peaks.size == 0:
         return Rhythm(**base,
                       tempo_bpm=Reading.absent("no onsets detected"),
