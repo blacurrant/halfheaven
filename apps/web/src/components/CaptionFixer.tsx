@@ -15,8 +15,12 @@ const clock = (s: number) =>
  *  first thing a creator reaches for. Applying edits re-renders only - the
  *  transcript is never regenerated, which would undo the correction. */
 export default function CaptionFixer({
-  jobId, ready, onApplied,
-}: { jobId: string; ready: boolean; onApplied: () => void }) {
+  jobId, ready, onApplied, onStart, onFailed,
+}: {
+  jobId: string; ready: boolean; onApplied: () => void;
+  /** Told when a render starts and when one fails, for a page that shows it. */
+  onStart?: () => void; onFailed?: (why: string) => void;
+}) {
   const [cards, setCards] = useState<Card[]>([]);
   const [edits, setEdits] = useState<Record<number, Edit>>({});
   const [editing, setEditing] = useState<number | null>(null);
@@ -56,15 +60,17 @@ export default function CaptionFixer({
   };
 
   const apply = async () => {
-    setBusy(true); setError("");
+    setBusy(true); setError(""); onStart?.();
     try {
       const r = await fetch(`/api/jobs/${jobId}/captions`, {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ edits: Object.values(edits) }),
       });
-      const d = await r.json();
-      if (d.error) setError(d.error);
+      const d = await r.json().catch(() => ({ error: "Those fixes didn't apply." }));
+      if (d.error) { setError(d.error); onFailed?.(d.error); }
       else { setEdits({}); onApplied(); }
+    } catch {
+      setError("Those fixes didn't apply."); onFailed?.("Those fixes didn't apply.");
     } finally { setBusy(false); }
   };
 

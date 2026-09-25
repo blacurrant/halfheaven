@@ -40,6 +40,7 @@
   font-style:normal;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
   display:inline-flex;align-items:center}
 .h1{margin-top:24px;font-size:clamp(42px,6vw,72px);line-height:1.01;font-weight:700;letter-spacing:-.035em}
+.h1Ask{display:block;margin-bottom:.22em;font-size:.5em;line-height:1.1;letter-spacing:-.02em;color:var(--muted)}
 .lede{margin:24px 0 0;font-size:18.5px;line-height:1.55;color:var(--muted);max-width:530px}
 .ctas{margin-top:34px;display:flex;flex-wrap:wrap;gap:10px}
 .ctas :global(.btn){height:50px;padding:0 26px;font-size:15.5px}

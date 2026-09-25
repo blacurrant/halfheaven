@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { jobPaths, recut } from "@/lib/pipeline";
+import { BUSY, jobPaths, runRecut } from "@/lib/pipeline";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // Vercel Hobby's ceiling; Next does not enforce it locally
@@ -28,16 +28,16 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   });
 }
 
+/** Caption fixes re-render only; re-transcribing would discard the correction. */
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const { edits } = await req.json();
   if (!Array.isArray(edits) || edits.length === 0) {
     return Response.json({ error: "Nothing to change." }, { status: 400 });
   }
-  try {
-    await recut(id, edits);
-    return Response.json({ ok: true, at: Date.now() });
-  } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 500 });
-  }
+  const { code, err } = await runRecut(id, ["--edits", JSON.stringify(edits)]);
+  if (code === BUSY) return Response.json({ error: err }, { status: 409 });
+  return code === 0
+    ? Response.json({ ok: true, at: Date.now() })
+    : Response.json({ error: err.trim().split("\n").pop() || "Those fixes didn't apply." }, { status: 500 });
 }

@@ -36,10 +36,12 @@ export async function POST(req: Request) {
         { error: "Your footage is no longer on the server. Start over and drop it again." },
         { status: 400 });
     }
+    // Without a look named, a re-run copies the reel the earlier edit copied.
+    const same = !referencePath && !styleId;
     const job = await startJob({
-      styleId,
-      referencePath: referencePath || undefined,
-      referenceName: referenceName || undefined,
+      styleId: same ? earlier!.styleId : styleId,
+      referencePath: (same ? earlier!.referencePath : referencePath) || undefined,
+      referenceName: (same ? earlier!.referenceName : referenceName) || undefined,
       targetPaths: paths,
       targetName: earlier!.targetName,
       overrides,

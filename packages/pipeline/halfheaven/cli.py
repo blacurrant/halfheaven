@@ -34,6 +34,30 @@ from halfheaven.render.video import mask_track, render
 from halfheaven.schemas import Canvas, Look
 
 
+def write_heard(work: pathlib.Path, transcript: Transcript) -> pathlib.Path:
+    """What was heard, so the studio can show creators their own words while
+    the edit is still being made."""
+    path = work / "transcript.json"
+    path.write_text(json.dumps({
+        "duration": round(transcript.duration, 3),
+        "words": [{"text": w.text, "start": round(w.start, 3), "end": round(w.end, 3)}
+                  for w in transcript.words],
+    }))
+    return path
+
+
+def write_decided(work: pathlib.Path, decisions) -> pathlib.Path:
+    """Which words the editorial pass cut and stressed, as word indices into
+    transcript.json. A cut is [start, stop) - stop itself is kept."""
+    path = work / "decisions.json"
+    path.write_text(json.dumps({
+        "cuts": [[start, stop] for start, stop in decisions.cuts],
+        "emphasis": list(decisions.emphasis_word_indices),
+        "punch": list(decisions.punch_word_indices),
+    }))
+    return path
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Apply one video's edit style to another.")
     parser.add_argument("--reference", required=True, help="an edited video to copy the style of")
@@ -125,6 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     target_info = infos[0]
     reel = Reel([(t, i.duration) for t, i in zip(takes, infos)]) if len(takes) > 1 else None
     print(f"      {len(transcript.words)} words over {transcript.duration:.1f}s")
+    write_heard(work, transcript)
 
     print("[3/5] editorial pass")
     decisions = decide(client, transcript, profile)
@@ -147,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
           f"{len(decisions.caption_chunks)} caption cards, "
           f"{len(decisions.punch_word_indices)} punch-ins, "
           f"{len(decisions.emphasis_word_indices)} emphasised words")
+    write_decided(work, decisions)
 
     print("[4/5] building program")
     # The canvas follows the reference, not the upload: we are copying its

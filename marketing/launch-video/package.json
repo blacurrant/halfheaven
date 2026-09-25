@@ -1,0 +1,13 @@
+{
+  "name": "halfheaven-launch-video",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "render": "node render.mjs",
+    "stills": "node render.mjs --stills",
+    "preview": "node render.mjs --preview"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

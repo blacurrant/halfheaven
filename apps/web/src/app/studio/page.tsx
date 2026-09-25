@@ -1,230 +1,197 @@
 "use client";
 
 /**
- * Point at a reel, hand over your footage, get it back cut that way.
+ * Point at a reel you love, hand over your footage, get it back cut that way.
  *
- * The first screen asks for exactly two things. Everything a creator might
- * reach for afterwards - the chat, caption fixes, looks, music, the timeline,
- * what we read from the reel, how close we got - still exists, but behind Edit
- * or the ⋯ menu: someone who only wanted their video edited should never have
- * to read past controls to get it.
+ * Three moments, one screen. First the pair: the reel on the left, your
+ * footage on the right, reading the reel the moment it lands. Then the edit
+ * being made, over your own footage, told in the reel's own caption voice and
+ * only in facts the pipeline has reported. Then the edit, which never leaves
+ * the screen again: every change (a look, a chat request, an undo) renders
+ * behind it and wipes in at the same moment of the video.
  *
- * Reading the reel starts the moment it is dropped. That work depends only on
- * the reel and takes about a third of its length, which is time the user
- * spends finding their own footage anyway.
- *
- * A refresh lands back on the same edit: what the page knows is remembered in
- * this browser (see lib/remember), and the footage stays on the server, so a
- * re-run after a refresh does not need the files dropped again.
+ * Everything a creator might reach for lives in the Edit sheet or the ⋯ menu,
+ * never on the video. A refresh lands back on the same edit: what the page
+ * knows is remembered in this browser (lib/remember) and the files stay on
+ * the server.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import CaptionFixer from "@/components/CaptionFixer";
 import TypeControls from "@/components/TypeControls";
-import Drop from "@/components/Drop";
-import Readout from "@/components/Readout";
-import Scorecard from "@/components/Scorecard";
-import ThemeToggle from "@/components/ThemeToggle";
-import Timeline from "@/components/Timeline";
+import Making from "@/components/studio/Making";
+import Menu, { type MenuView } from "@/components/studio/Menu";
+import Player from "@/components/studio/Player";
+import SaveButton from "@/components/studio/SaveButton";
+import Setup from "@/components/studio/Setup";
+import Sheet, { type Tab } from "@/components/studio/Sheet";
+import { AskTab, LooksTab, MusicTab, type Msg, YouTab } from "@/components/studio/Tabs";
+import Toast, { type Note } from "@/components/studio/Toast";
+import { More, Sliders, Sound, Touch } from "@/components/studio/icons";
+import s from "@/components/studio/studio.module.css";
 import type { Fingerprint } from "@/lib/fingerprint";
+import type { Facts, Receipt } from "@/lib/pipeline";
 import { forgetJob, recall, remember } from "@/lib/remember";
 import type { Score } from "@/lib/score";
+import { STAGE_NAMES, voiceOf } from "@/lib/studio";
 
 type Read = {
   id: string; status: "running" | "done" | "error"; name: string; videoPath: string;
   error?: string; fingerprint?: Fingerprint;
 };
 type Style = { id: string; name: string };
-type Receipt = {
-  clips: number; captions: number; emphasised: number; punches: number;
-  wordsCut: number; sourceSeconds: number; outputSeconds: number;
-};
 type Job = {
   id: string; status: "running" | "done" | "error"; stageIndex: number; progress: number;
-  targetName: string; error?: string;
-  profile?: unknown; receipt?: Receipt; clips?: { start: number; end: number }[];
+  targetName: string; error?: string; startedAt?: number; facts?: Facts;
+  profile?: Record<string, unknown>; receipt?: Receipt; clips?: { start: number; end: number }[];
 };
-type Msg = { who: "me" | "bot"; text: string; changed?: string[] };
-type Panel = "edit" | "read" | "score" | null;
-/** Everything a refresh should not cost. */
+/** The choices a change can overwrite, kept so Undo can put them back. */
+type Ui = { look: string; speaker: string; backdrop: string | null; track: string; overrides: Record<string, unknown> };
+/** One step back: a re-render of the same edit, or a whole remade edit. */
+type Step = { kind: "restyle"; jobId: string; ui: Ui } | { kind: "remake"; prev: Job; ui: Ui };
+type Applying = { label: string; startedAt: number; estimate: number };
 type Session = {
-  read: Read | null; preset: Style | null; job: Job | null; lastGood: Job | null;
-  footageJob: string | null; takes: number; overrides: Record<string, unknown>;
-  msgs: Msg[]; look: string; speaker: string; backdrop: string | null; track: string;
-  panel: Panel; tab: Tab; compare: boolean;
+  read: Read | null; preset: Style | null; edit: Job | null; run: Job | null;
+  footageJob: string | null; takes: number; sourceSeconds: number | null;
+  ui: Ui; msgs: Msg[]; history: Step[]; heard: boolean; heldOnce: boolean; sheet: boolean; tab: Tab;
 };
-const SESSION = "studio";
+const SESSION = "studio.v2";
+const HELLO: Msg = { who: "bot", text: "What should I change? Plain words are fine." };
+const FIRST_UI: Ui = { look: "", speaker: "off", backdrop: null, track: "", overrides: {} };
 
-// Colours that sit well behind skin: two neutrals, then a few saturated plates.
-const BACKDROPS = ["#111111", "#F4F1EA", "#1E3A8A", "#B91C1C", "#15803D", "#F5B700"];
+// A re-render takes a fixed start-up plus some share of the video's length.
+// The share is learned from each change this browser makes.
+const RESTYLE_BASE = 3;
+const learnedShare = () => { try { return Number(localStorage.getItem("hh.restyleShare")) || 0.45; } catch { return 0.45; } };
+const learn = (seconds: number, videoSeconds: number) => {
+  if (!videoSeconds) return;
+  const share = Math.min(2, Math.max(0.1, 0.6 * learnedShare() + 0.4 * ((seconds - RESTYLE_BASE) / videoSeconds)));
+  try { localStorage.setItem("hh.restyleShare", String(share)); } catch { /* estimate stays the default */ }
+};
 
-const SPEAKER_MODES = [
-  { id: "off", label: "As styled", blurb: "Captions sit where the look puts them" },
-  { id: "around", label: "Around you", blurb: "Kept off your face and body" },
-  { id: "behind", label: "Behind you", blurb: "Key words tuck behind your head" },
-];
-type Tab = "ask" | "captions" | "style";
+const durationOf = (file: File) => new Promise<number>(resolve => {
+  const url = URL.createObjectURL(file);
+  const v = document.createElement("video");
+  v.preload = "metadata";
+  v.onloadedmetadata = () => { resolve(Number.isFinite(v.duration) ? v.duration : 0); URL.revokeObjectURL(url); };
+  v.onerror = () => { resolve(0); URL.revokeObjectURL(url); };
+  v.src = url;
+});
 
-/* What the app is doing, said the way a person would say it. */
-const DOING = [
-  "Studying the look",
-  "Listening to your video",
-  "Deciding what to cut",
-  "Laying out the captions",
-  "Putting it together",
-];
-
-const SUGGESTIONS = [
-  "Bigger captions",
-  "Cut it tighter",
-  "Less zooming",
-  "Warmer colour",
-  "Move captions up",
-  "Fewer words per line",
-  "Punch more words",
-  "Keep more pauses",
-  "All caps captions",
-];
-
-const HELLO: Msg = { who: "bot", text: "Tell me what to change — plain words are fine." };
-
-const mb = (files: File[]) => `${(files.reduce((a, f) => a + f.size, 0) / 1e6).toFixed(1)} MB`;
+const real = (id: string | undefined) => !!id && id !== "…" && id !== "—";
 
 export default function Studio() {
   // ---- what goes in ------------------------------------------------------
-  const [refFile, setRefFile] = useState<File | null>(null);
   const [read, setRead] = useState<Read | null>(null);
+  const [refUrl, setRefUrl] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const readSeq = useRef(0);                      // the latest reel dropped wins
   const [styles, setStyles] = useState<Style[]>([]);
-  const [presets, setPresets] = useState(false);  // picking a built-in look instead of a reel
+  const [presets, setPresets] = useState(false);
   const [preset, setPreset] = useState<Style | null>(null);
   const [targets, setTargets] = useState<File[]>([]);
-  const [takes, setTakes] = useState(0);          // outlives the files, which a refresh drops
+  const [targetUrl, setTargetUrl] = useState<string | null>(null);
+  const [sourceSeconds, setSourceSeconds] = useState<number | null>(null);
+  const [takes, setTakes] = useState(0);
   // The first job made with this footage. Every re-run reuses what it uploaded.
   const [footageJob, setFootageJob] = useState<string | null>(null);
+  const [queued, setQueued] = useState(false);
 
-  // ---- the render --------------------------------------------------------
-  const [job, setJob] = useState<Job | null>(null);
-  const [uploaded, setUploaded] = useState(1);
-  const lastGood = useRef<Job | null>(null);      // a failed tweak falls back to this
-  const [overrides, setOverrides] = useState<Record<string, unknown>>({});
-  const [videoKey, setVideoKey] = useState(0);
-
-  // ---- watching it -------------------------------------------------------
-  // Browsers only autoplay muted, so the preview starts silent and one tap
-  // turns it up. A comparison plays two files at once, so only the edited
-  // side carries sound - both would double every word.
-  const [sound, setSound] = useState(false);
-  const [compare, setCompare] = useState(false);
-  const [split, setSplit] = useState(50);
-  const [playhead, setPlayhead] = useState(0);
-  const [menu, setMenu] = useState(false);
-  const [panel, setPanel] = useState<Panel>(null);
-  const [tab, setTab] = useState<Tab>("ask");
-
-  // ---- behind Edit -------------------------------------------------------
+  // ---- the edit ------------------------------------------------------------
+  const [run, setRun] = useState<Job | null>(null);          // being made
+  const [edit, setEdit] = useState<Job | null>(null);        // on screen
+  const [uploaded, setUploaded] = useState<number | null>(null);
+  const [version, setVersion] = useState(0);                 // bumps when the file changes in place
+  const [startAt, setStartAt] = useState<number | undefined>(0);
+  const [applying, setApplying] = useState<Applying | null>(null);
+  const [applyingLook, setApplyingLook] = useState<string | null>(null);
+  const [landedLook, setLandedLook] = useState<string | null>(null);
+  const [history, setHistory] = useState<Step[]>([]);
+  const [ui, setUi] = useState<Ui>(FIRST_UI);
   const [msgs, setMsgs] = useState<Msg[]>([HELLO]);
-  const [draft, setDraft] = useState("");
   const [thinking, setThinking] = useState(false);
-  const [looks, setLooks] = useState<{ id: string; label: string; blurb: string }[]>([]);
-  const looksAsked = useRef(false);
-  const [look, setLook] = useState("");
-  const [styling, setStyling] = useState(false);
-  const [speaker, setSpeaker] = useState("off");
-  const [placing, setPlacing] = useState(false);
-  const [speakerNote, setSpeakerNote] = useState("");
-  const [backdrop, setBackdrop] = useState<string | null>(null);
-  const [track, setTrack] = useState("");
-  const [mixing, setMixing] = useState(false);
+
+  // ---- watching it ---------------------------------------------------------
+  const [muted, setMuted] = useState(true);
+  const [heard, setHeard] = useState(false);       // has turned the sound on once
+  const [heldOnce, setHeldOnce] = useState(false); // has held the video once
+  const [revealing, setRevealing] = useState(false);
+  const [unseen, setUnseen] = useState(false);
+  const [time, setTime] = useState(0);
+  const [length, setLength] = useState(0);
+  const [seek, setSeek] = useState<{ t: number; n: number } | undefined>();
+  const [reelHeld, setReelHeld] = useState(false);
+  const [sheet, setSheet] = useState(false);
+  const [tab, setTab] = useState<Tab>("looks");
+  const [menu, setMenu] = useState<MenuView | null>(null);
+  const [note, setNote] = useState<Note | null>(null);
   const [score, setScore] = useState<Score | null>(null);
   const [scoring, setScoring] = useState(false);
   const [scoreError, setScoreError] = useState("");
 
-  const screenRef = useRef<HTMLDivElement>(null);
-  const beforeRef = useRef<HTMLVideoElement>(null);
-  const afterRef = useRef<HTMLVideoElement>(null);
-  const logRef = useRef<HTMLDivElement>(null);
-  const musicInput = useRef<HTMLInputElement>(null);
+  // Handlers and pollers read the latest of these without re-subscribing.
+  const editRef = useRef(edit);
+  const historyRef = useRef(history);
+  const uiRef = useRef(ui);
+  useEffect(() => { editRef.current = edit; historyRef.current = history; uiRef.current = ui; }, [edit, history, ui]);
+  const busy = useRef(false);                       // one change at a time
+  const remake = useRef<Ui | null>(null);           // the choices before a chat re-run
+  const before = useRef<Ui | null>(null);           // the choices before a restyle
+  const pendingNote = useRef<Omit<Note, "n"> | null>(null);
+  const synced = useRef<string | null>(null);       // the edit whose choices were last read from its profile
+  const notes = useRef(0);
 
-  // ---- surviving a refresh ----------------------------------------------
-  // Restored after mount rather than in the state initialisers: the server
-  // render has no storage, and the two must agree on the first paint.
+  const say = useCallback((n: Omit<Note, "n">) => setNote({ ...n, n: ++notes.current }), []);
+
+  // ---- surviving a refresh ---------------------------------------------------
   const [restored, setRestored] = useState(false);
-  const restoredSubject = useRef<string | null>(null);   // the job whose choices were restored
   useEffect(() => {
-    const s = recall<Session>(SESSION);
+    const saved = recall<Session>(SESSION);
     /* eslint-disable react-hooks/set-state-in-effect -- storage is only readable after mount */
-    if (s) {
-      setRead(s.read); setPreset(s.preset); setJob(s.job); lastGood.current = s.lastGood;
-      setFootageJob(s.footageJob); setTakes(s.takes); setOverrides(s.overrides);
-      setMsgs(s.msgs?.length ? s.msgs : [HELLO]); setLook(s.look);
-      setSpeaker(s.speaker); setBackdrop(s.backdrop); setTrack(s.track);
-      setPanel(s.panel); setTab(s.tab); setCompare(s.compare);
-      restoredSubject.current = s.job?.id ?? null;
-      // The server may have moved on - or lost it - while the page was closed.
-      const id = s.job?.id;
-      if (id && s.job?.status !== "running") {
+    if (saved) {
+      setRead(saved.read); setPreset(saved.preset); setEdit(saved.edit); setRun(saved.run);
+      setFootageJob(saved.footageJob); setTakes(saved.takes); setSourceSeconds(saved.sourceSeconds);
+      setUi(saved.ui ?? FIRST_UI); setMsgs(saved.msgs?.length ? saved.msgs : [HELLO]);
+      setHistory(saved.history ?? []); setHeard(saved.heard); setHeldOnce(saved.heldOnce);
+      setSheet(saved.sheet && !!saved.edit); setTab(saved.tab ?? "looks");
+      synced.current = saved.edit?.id ?? null;
+      // The server may have lost it while the page was closed.
+      const id = saved.edit?.id;
+      if (id) {
         fetch(`/api/jobs/${id}`).then(r => {
           if (r.status !== 404) return;
-          setJob(j => j?.id === id
-            ? { ...j, status: "error", error: "This edit is no longer on the server. Start over to make it again." }
-            : j);
+          setEdit(null); setHistory([]); setSheet(false);
+          say({ text: "That edit is no longer on the server. Make it again.", bad: true });
         }).catch(() => {});
       }
     }
     setRestored(true);
     /* eslint-enable react-hooks/set-state-in-effect */
-  }, []);
+  }, [say]);
 
   useEffect(() => {
     if (!restored) return;
-    // "…" is an upload in flight; there is nothing yet the server could answer for.
-    const settled = (j: Job | null) => (j && j.id !== "…" ? j : null);
-    const s: Session = {
-      read: read && read.id !== "…" ? read : null, preset,
-      job: settled(job) ?? settled(lastGood.current), lastGood: lastGood.current,
-      footageJob, takes, overrides, msgs, look, speaker, backdrop, track, panel, tab, compare,
-    };
-    remember(SESSION, s);
-  }, [restored, read, preset, job, footageJob, takes, overrides, msgs, look, speaker, backdrop,
-      track, panel, tab, compare]);
+    remember(SESSION, {
+      read: read && real(read.id) ? read : null, preset, edit,
+      run: run && real(run.id) && run.status === "running" ? run : null,
+      footageJob, takes, sourceSeconds, ui, msgs, history, heard, heldOnce, sheet, tab,
+    } satisfies Session);
+  }, [restored, read, preset, edit, run, footageJob, takes, sourceSeconds, ui, msgs, history, heard, heldOnce, sheet, tab]);
 
-  useEffect(() => { fetch("/api/styles").then(r => r.json()).then(d => setStyles(d.styles ?? [])); }, []);
+  useEffect(() => { fetch("/api/styles").then(r => r.json()).then(d => setStyles(d.styles ?? [])).catch(() => {}); }, []);
 
-  // The look catalogue is read from the renderer, which costs a Python start,
-  // so it is only asked for once someone opens Edit.
-  useEffect(() => {
-    if (panel !== "edit" || looksAsked.current) return;
-    looksAsked.current = true;
-    fetch("/api/looks").then(r => r.json()).then(d => setLooks(d.looks ?? []));
-  }, [panel]);
-
-  useEffect(() => { logRef.current?.scrollTo({ top: 1e6, behavior: "smooth" }); }, [msgs, thinking]);
-
-  useEffect(() => {
-    if (!menu) return;
-    const close = (e: KeyboardEvent) => { if (e.key === "Escape") setMenu(false); };
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [menu]);
-
-  // ---- polling -----------------------------------------------------------
-  // Keyed on the id rather than the whole reading, so each poll result does not
-  // restart the clock and leave the seconds counter running slow.
+  // ---- reading the reel --------------------------------------------------------
   const readId = read?.id;
   const readRunning = read?.status === "running";
   useEffect(() => {
     if (!readRunning || !readId) return;
     const tick = setInterval(() => setElapsed(e => e + 1), 1000);
     const poll = readId === "…" ? undefined : setInterval(async () => {
-      const r = await fetch(`/api/fingerprint/${readId}`);
+      const r = await fetch(`/api/fingerprint/${readId}`).catch(() => null);
+      if (!r) return;
       if (r.status === 404) {
-        // Readings live only as long as the server that ran them.
-        setRead(cur => (cur?.id === readId
-          ? { ...cur, status: "error", error: "That reading was interrupted. Drop the reel again." }
-          : cur));
+        setRead(cur => (cur?.id === readId ? { ...cur, status: "error", error: "That reading was interrupted. Add the reel again." } : cur));
         return;
       }
       if (!r.ok) return;
@@ -234,29 +201,10 @@ export default function Studio() {
     return () => { clearInterval(tick); clearInterval(poll); };
   }, [readId, readRunning]);
 
-  useEffect(() => {
-    if (job?.status !== "running" || job.id === "…") return;
-    const t = setInterval(async () => {
-      const r = await fetch(`/api/jobs/${job.id}`);
-      if (!r.ok && r.status !== 404) return;
-      const next: Job = r.ok ? await r.json()
-        : { ...job, status: "error", error: "This edit is no longer on the server." };
-      if (next.status === "done") lastGood.current = next;
-      if (next.status === "error" && lastGood.current) {
-        // A tweak that fails shouldn't cost the edit it was tweaking.
-        setJob(lastGood.current);
-        setMsgs(m => [...m, { who: "bot", text: `That change didn't render, so I kept the last version. ${next.error ?? ""}`.trim() }]);
-        return;
-      }
-      setJob(next);
-    }, 900);
-    return () => clearInterval(t);
-  }, [job]);
-
-  // ---- choosing the look -------------------------------------------------
   const readReference = useCallback(async (file: File) => {
     const mine = ++readSeq.current;
-    setRefFile(file); setPreset(null); setPresets(false); setElapsed(0);
+    setPreset(null); setPresets(false); setElapsed(0);
+    setRefUrl(old => { if (old) URL.revokeObjectURL(old); return URL.createObjectURL(file); });
     setRead({ id: "…", status: "running", name: file.name, videoPath: "" });
     const form = new FormData();
     form.set("reference", file);
@@ -269,572 +217,441 @@ export default function Studio() {
         : { id: "—", status: "error", name: file.name, videoPath: "", error: data.error });
     } catch {
       if (mine === readSeq.current) {
-        setRead({ id: "—", status: "error", name: file.name, videoPath: "",
-                  error: "The upload didn't go through. Give it another go." });
+        setRead({ id: "—", status: "error", name: file.name, videoPath: "", error: "The upload didn't go through. Try again." });
       }
     }
   }, []);
 
-  const choosePreset = (s: Style) => {
-    readSeq.current++;
-    setPreset(s); setRead(null); setRefFile(null);
-  };
+  const chooseFootage = useCallback(async (files: File[]) => {
+    setTargets(files); setFootageJob(null); setTakes(0);
+    setTargetUrl(old => { if (old) URL.revokeObjectURL(old); return URL.createObjectURL(files[0]); });
+    setSourceSeconds(null);
+    const lengths = await Promise.all(files.map(durationOf));
+    setSourceSeconds(lengths.reduce((a, b) => a + b, 0) || null);
+  }, []);
 
-  // ---- making the edit ---------------------------------------------------
-  // Every run - the first and each chat tweak - sends the same look. A tweak
-  // that forgot the reel would quietly re-render against a built-in look.
-  const start = useCallback(async (patch: Record<string, unknown>) => {
+  // ---- making the edit -----------------------------------------------------------
+  // Every run - the first and each chat request - sends the same look. A
+  // request that forgot the reel would quietly re-render against a built-in look.
+  const start = useCallback(async (patch: Record<string, unknown>, uiBefore?: Ui) => {
     if (!targets.length && !footageJob) return;
     const fd = new FormData();
     if (footageJob) fd.set("fromJob", footageJob);
     else for (const f of targets) fd.append("target", f);
-    if (read?.status === "done") {
-      fd.set("referencePath", read.videoPath);
-      fd.set("referenceName", read.name);
-    } else if (preset) {
-      fd.set("styleId", preset.id);
-    } else return;
+    if (read?.status === "done") { fd.set("referencePath", read.videoPath); fd.set("referenceName", read.name); }
+    else if (preset) fd.set("styleId", preset.id);
+    // A re-run with neither copies the reel its footage was first edited to.
+    else if (!footageJob) return;
     fd.set("overrides", JSON.stringify(patch));
+    remake.current = uiBefore ?? null;
 
-    const name = footageJob ? job?.targetName ?? lastGood.current?.targetName ?? ""
-      : targets.length > 1 ? `${targets.length} takes` : targets[0].name;
-    setScore(null); setScoreError(""); setUploaded(0);
-    setJob({ id: "…", status: "running", stageIndex: -1, progress: 0.02, targetName: name });
-    const d = await new Promise<{ id?: string; error?: string }>(res => {
+    const name = footageJob ? editRef.current?.targetName ?? "" : targets.length > 1 ? `${targets.length} takes` : targets[0].name;
+    const sending = !footageJob;
+    setUploaded(sending ? 0 : null);
+    setRun({ id: "…", status: "running", stageIndex: -1, progress: 0, targetName: name, startedAt: Date.now() });
+    const d = await new Promise<{ id?: string; error?: string }>(resolve => {
       const x = new XMLHttpRequest();
       x.open("POST", "/api/jobs");
-      x.upload.onprogress = e => e.lengthComputable && setUploaded(e.loaded / e.total);
-      x.onload = () => { try { res(JSON.parse(x.responseText || "{}")); } catch { res({ error: "The server didn't answer properly." }); } };
-      x.onerror = () => res({ error: "The upload didn't go through. Give it another go." });
+      x.upload.onprogress = e => { if (e.lengthComputable && sending) setUploaded(e.loaded / e.total); };
+      x.onload = () => { try { resolve(JSON.parse(x.responseText || "{}")); } catch { resolve({ error: "The server didn't answer properly." }); } };
+      x.onerror = () => resolve({ error: "The upload didn't go through. Try again." });
       x.send(fd);
     });
+    setUploaded(null);
     if (d.id) {
       if (!footageJob) { setFootageJob(d.id); setTakes(targets.length); }
-      setJob({ id: d.id, status: "running", stageIndex: 0, progress: 0.08, targetName: name });
-    } else if (lastGood.current) {
-      setJob(lastGood.current);
-      setMsgs(m => [...m, { who: "bot", text: d.error ?? "That didn't go through." }]);
+      setRun({ id: d.id, status: "running", stageIndex: 0, progress: 0.08, targetName: name, startedAt: Date.now() });
+    } else if (editRef.current) {
+      setRun(null);
+      say({ text: d.error ?? "That didn't go through.", bad: true });
     } else {
-      setJob({ id: "—", status: "error", stageIndex: 0, progress: 0, targetName: name, error: d.error });
+      setRun({ id: "—", status: "error", stageIndex: 0, progress: 0, targetName: name, error: d.error });
     }
-  }, [targets, footageJob, job, read, preset]);
+  }, [targets, footageJob, read, preset, say]);
+
+  // Tapped while the reel was still being read: go the moment it is.
+  useEffect(() => {
+    if (!queued) return;
+    /* eslint-disable react-hooks/set-state-in-effect -- reacting to the reading finishing */
+    if (read?.status === "done") { setQueued(false); start({}); }
+    else if (read?.status === "error") setQueued(false);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [queued, read?.status, start]);
+
+  const runId = run?.id;
+  const runRunning = run?.status === "running";
+  useEffect(() => {
+    if (!runRunning || !real(runId)) return;
+    const id = runId!;
+    const t = setInterval(async () => {
+      const r = await fetch(`/api/jobs/${id}`).catch(() => null);
+      if (!r || (!r.ok && r.status !== 404)) return;
+      const next: Job = r.ok ? await r.json()
+        : { id, status: "error", stageIndex: 0, progress: 0, targetName: "", error: "This edit is no longer on the server." };
+      if (next.status === "running") { setRun(cur => (cur?.id === id ? next : cur)); return; }
+      setRun(null);
+      const prev = editRef.current;
+      if (next.status === "error") {
+        if (prev) say({ text: "That change didn't render, so the last version stays.", bad: true });
+        else setRun(next);
+        return;
+      }
+      setStartAt(0);
+      setEdit(next);
+      if (!prev) {
+        setRevealing(true);
+        setTimeout(() => setRevealing(false), 2000);
+        if (document.hidden) setUnseen(true);
+      } else {
+        setHistory(h => [...h, { kind: "remake", prev, ui: remake.current ?? uiRef.current }]);
+        const shorter = prev.receipt && next.receipt ? prev.receipt.outputSeconds - next.receipt.outputSeconds : 0;
+        pendingNote.current = { text: shorter >= 1 ? `Done · ${Math.round(shorter)}s shorter` : "Done", undo: true };
+      }
+    }, 900);
+    return () => clearInterval(t);
+  }, [runId, runRunning, say]);
+
+  // A fresh edit starts from the choices it was made with.
+  useEffect(() => {
+    if (!edit || synced.current === edit.id) return;
+    synced.current = edit.id;
+    const subject = (edit.profile as { subject?: { captions?: string; background_hex?: string | null } } | undefined)?.subject;
+    setUi(u => ({ ...u, look: "", speaker: subject?.captions ?? "off", backdrop: subject?.background_hex ?? null }));
+  }, [edit]);
+
+  // The tab says where things stand, for someone who switched away.
+  useEffect(() => {
+    const back = () => { if (!document.hidden) setUnseen(false); };
+    document.addEventListener("visibilitychange", back);
+    return () => document.removeEventListener("visibilitychange", back);
+  }, []);
+  useEffect(() => {
+    document.title = run && run.status === "running" && !edit
+      ? `${STAGE_NAMES[Math.max(0, run.stageIndex)]}… · Halfheaven`
+      : unseen ? "Your edit is ready · Halfheaven" : "Studio · Halfheaven";
+  }, [run, edit, unseen]);
+
+  // ---- changing it -----------------------------------------------------------------
+  // A change shows as chosen the moment it is tapped; the video keeps playing
+  // under a sheen until the render lands, then wipes to it. A failure puts the
+  // old choice back.
+  const applyStart = useRef(0);
+  const begin = useCallback((label: string, next?: Partial<Ui>) => {
+    const e = editRef.current;
+    if (!e || busy.current) return false;
+    busy.current = true;
+    before.current = uiRef.current;
+    applyStart.current = Date.now();
+    if (next) setUi(u => ({ ...u, ...next }));
+    setApplying({ label, startedAt: applyStart.current, estimate: RESTYLE_BASE + learnedShare() * (e.receipt?.outputSeconds ?? 30) });
+    return true;
+  }, []);
+  const landed = useCallback((text: string) => {
+    const e = editRef.current;
+    if (e) learn((Date.now() - applyStart.current) / 1000, e.receipt?.outputSeconds ?? 0);
+    if (e && before.current) {
+      const was = before.current;
+      setHistory(h => [...h, { kind: "restyle", jobId: e.id, ui: was }]);
+    }
+    pendingNote.current = { text, undo: true };
+    busy.current = false;
+    setApplying(null);
+    setStartAt(undefined);
+    setVersion(v => v + 1);
+  }, []);
+  const failed = useCallback((why: string) => {
+    busy.current = false;
+    if (before.current) setUi(before.current);
+    setApplying(null);
+    setApplyingLook(null);
+    say({ text: why || "That didn't apply.", bad: true });
+  }, [say]);
+
+  /** A change that is one POST and a render. */
+  const change = useCallback(async (label: string, done: string, url: string, init: RequestInit, next?: Partial<Ui>) => {
+    const e = editRef.current;
+    if (!e || !begin(label, next)) return false;
+    try {
+      const r = await fetch(`/api/jobs/${e.id}/${url}`, init);
+      if (!r.ok) { failed((await r.json().catch(() => ({}))).error ?? "That didn't apply."); return false; }
+      landed(done);
+      return true;
+    } catch { failed("That didn't apply."); return false; }
+  }, [begin, landed, failed]);
+
+  const json = (body: unknown): RequestInit => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+  const chooseLook = async (look: { id: string; label: string }) => {
+    setApplyingLook(look.id);
+    const ok = await change(`Applying ${look.label}`, `${look.label} is on`, "look", json({ preset: look.id }), { look: look.id });
+    setApplyingLook(null);
+    if (ok) { setLandedLook(look.id); setTimeout(() => setLandedLook(l => (l === look.id ? null : l)), 2400); }
+  };
+  const chooseSpeaker = (mode: string) => change(
+    "Placing your captions",
+    mode === "off" ? "Captions back where the look puts them" : mode === "around" ? "Captions kept off you" : "Key words tucked behind you",
+    "subject", json({ mode }), { speaker: mode });
+  const chooseBackdrop = (hex: string | null) => change(
+    hex ? "Changing your background" : "Putting your background back",
+    hex ? "New background" : "Background as shot", "subject", json({ background: hex }), { backdrop: hex });
+  const setMusic = (file: File | null) => {
+    const fd = new FormData();
+    if (file) fd.set("track", file); else fd.set("remove", "1");
+    return change(file ? "Mixing your track" : "Taking the music out", file ? "Music added" : "Music removed",
+      "music", { method: "POST", body: fd }, { track: file ? file.name : "" });
+  };
+
+  const ask = async (text: string) => {
+    const e = editRef.current;
+    if (!e || thinking || run || busy.current) return;
+    setMsgs(m => [...m, { who: "me", text }]);
+    setThinking(true);
+    try {
+      const r = await fetch("/api/chat", json({ message: text, profile: e.profile }));
+      const d = await r.json();
+      setMsgs(m => [...m, { who: "bot", text: d.reply, changed: d.changed }]);
+      if (Object.keys(d.overrides ?? {}).length) {
+        const merged = { ...uiRef.current.overrides, ...d.overrides };
+        const was = uiRef.current;
+        setUi(u => ({ ...u, overrides: merged }));
+        start(merged, was);
+      }
+    } catch {
+      setMsgs(m => [...m, { who: "bot", text: "I couldn't reach the model just then. Try that again." }]);
+    } finally { setThinking(false); }
+  };
+
+  const undo = async () => {
+    const last = historyRef.current.at(-1);
+    if (!last || busy.current || run) return;
+    setNote(null);
+    if (last.kind === "remake") {
+      synced.current = last.prev.id;          // its choices come from the history, not its profile
+      setUi(last.ui);
+      setHistory(h => h.slice(0, -1));
+      pendingNote.current = { text: "Undone" };
+      setStartAt(0);
+      setEdit(last.prev);
+      return;
+    }
+    busy.current = true;
+    setApplying({ label: "Undoing", startedAt: Date.now(), estimate: 1 });
+    try {
+      const r = await fetch(`/api/jobs/${last.jobId}/undo`, { method: "POST" });
+      if (!r.ok) { say({ text: "Couldn't undo that one.", bad: true }); return; }
+      setUi(last.ui);
+      setHistory(h => h.slice(0, -1));
+      pendingNote.current = { text: "Undone" };
+      setStartAt(undefined);
+      setVersion(v => v + 1);
+    } finally { busy.current = false; setApplying(null); }
+  };
+
+  // The clock the "about Ns" countdown reads while a change renders.
+  const [now, setNow] = useState(0);
+  useEffect(() => {
+    if (!applying) return;
+    const t = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(t);
+  }, [applying]);
+
+  const onWipeDone = useCallback(() => {
+    if (pendingNote.current) { say(pendingNote.current); pendingNote.current = null; }
+  }, [say]);
+
+  const runScore = async () => {
+    setMenu("score");
+    const e = editRef.current;
+    if (!e || score || scoring) return;
+    setScoring(true); setScoreError("");
+    try {
+      const d = await (await fetch("/api/score", json({ jobId: e.id }))).json();
+      if (d.error) setScoreError(d.error); else setScore(d);
+    } catch { setScoreError("Couldn't reach the scorer. Try again in a moment."); }
+    finally { setScoring(false); }
+  };
 
   const startOver = () => {
     readSeq.current++;
-    for (const j of [job, lastGood.current]) if (j) forgetJob(j.id);
-    lastGood.current = null;
-    setFootageJob(null); setTakes(0);
-    setJob(null); setRead(null); setRefFile(null); setPreset(null); setPresets(false); setTargets([]);
-    setOverrides({}); setMsgs([HELLO]); setPanel(null); setTab("ask"); setCompare(false);
-    setScore(null); setScoreError(""); setTrack(""); setLook(""); setSound(false); setMenu(false);
-    setSpeaker("off"); setBackdrop(null);
-  };
-
-  // ---- behind Edit -------------------------------------------------------
-  /** Caption fixes, looks and music re-render in place: same job, new file. */
-  const rerendered = () => { setVideoKey(k => k + 1); setScore(null); };
-
-  const say = useCallback(async (text: string) => {
-    // Enter still reaches here while a re-run is going; a second would race it.
-    if (!text.trim() || thinking || job?.status === "running") return;
-    setMsgs(m => [...m, { who: "me", text }]); setDraft(""); setThinking(true);
-    try {
-      const r = await fetch("/api/chat", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message: text, profile: job?.profile }),
-      });
-      const d = await r.json();
-      const merged = { ...overrides, ...d.overrides };
-      setOverrides(merged);
-      setMsgs(m => [...m, { who: "bot", text: d.reply, changed: d.changed }]);
-      if (Object.keys(d.overrides ?? {}).length) start(merged);
-    } finally { setThinking(false); }
-  }, [thinking, job, overrides, start]);
-
-  const chooseLook = async (id: string) => {
-    if (!job) return;
-    setLook(id); setStyling(true);
-    try {
-      await fetch(`/api/jobs/${job.id}/look`, {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ preset: id }),
-      });
-      rerendered();
-    } finally { setStyling(false); }
-  };
-
-  // Each edit remembers its own mode; a fresh edit starts from what it was made with.
-  useEffect(() => {
-    // Straight after a refresh the remembered choice is newer than the profile,
-    // which still describes the edit as first made.
-    if (restoredSubject.current && restoredSubject.current === job?.id) { restoredSubject.current = null; return; }
-    const subject = (job?.profile as { subject?: { captions?: string; background_hex?: string | null } } | undefined)?.subject;
-    setSpeaker(subject?.captions ?? "off"); setBackdrop(subject?.background_hex ?? null); setSpeakerNote("");
-  }, [job?.id, job?.profile]);
-
-  /** Speaker placement and backdrop share one route: both are a render over
-   *  the separation made with the edit. A failure puts the old choice back. */
-  const applySubject = async (change: { mode?: string; background?: string | null }, undo: () => void) => {
-    if (!job) return;
-    setPlacing(true); setSpeakerNote("");
-    try {
-      const r = await fetch(`/api/jobs/${job.id}/subject`, {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify(change),
-      });
-      if (r.ok) rerendered();
-      else {
-        undo();
-        setSpeakerNote((await r.json().catch(() => ({}))).error ?? "That didn't apply.");
-      }
-    } finally { setPlacing(false); }
-  };
-  const chooseSpeaker = (mode: string) => {
-    if (mode === speaker) return;
-    const was = speaker;
-    setSpeaker(mode);
-    applySubject({ mode }, () => setSpeaker(was));
-  };
-  const chooseBackdrop = (colour: string | null) => {
-    if (colour === backdrop) return;
-    const was = backdrop;
-    setBackdrop(colour);
-    applySubject({ background: colour }, () => setBackdrop(was));
-  };
-  // A colour picker reports every step of a drag through React's onChange; each
-  // would start a render. The native change event fires once, when it closes.
-  const picker = useRef<HTMLInputElement>(null);
-  const pickLatest = useRef(chooseBackdrop);
-  pickLatest.current = chooseBackdrop;
-  useEffect(() => {
-    const input = picker.current;
-    if (!input) return;
-    const picked = () => pickLatest.current(input.value);
-    input.addEventListener("change", picked);
-    return () => input.removeEventListener("change", picked);
-  }, [panel, tab]);
-
-  const setMusic = async (file: File | null) => {
-    if (!job) return;
-    setMixing(true);
-    try {
-      const fd = new FormData();
-      if (file) fd.set("track", file); else fd.set("remove", "1");
-      const r = await fetch(`/api/jobs/${job.id}/music`, { method: "POST", body: fd });
-      if ((await r.json()).ok) { setTrack(file ? file.name : ""); rerendered(); }
-    } finally { setMixing(false); }
-  };
-
-  const runScore = async () => {
-    setPanel("score");
-    if (!job || job.status !== "done" || score || scoring) return;
-    setScoring(true); setScoreError("");
-    try {
-      const res = await fetch("/api/score", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ jobId: job.id }),
-      });
-      const data = await res.json();
-      if (data.error) setScoreError(data.error); else setScore(data);
-    } catch {
-      setScoreError("Couldn't reach the scorer. Try again in a moment.");
-    } finally { setScoring(false); }
-  };
-
-  /* the edited cut runs ahead of the source, so map program time back */
-  const sync = () => {
-    const b = beforeRef.current, a = afterRef.current;
-    if (!b || !a) return;
-    let want = a.currentTime;
-    const clips = job?.clips;
-    if (clips?.length) {
-      let at = 0; want = clips[clips.length - 1].end;
-      for (const c of clips) {
-        const d = c.end - c.start;
-        if (a.currentTime < at + d) { want = c.start + (a.currentTime - at); break; }
-        at += d;
-      }
-    }
-    if (Math.abs(b.currentTime - want) > 0.12) b.currentTime = want;
-  };
-
-  const drag = (e: React.PointerEvent) => {
-    if (e.buttons === 0 && e.type !== "pointerdown") return;
-    const r = screenRef.current?.getBoundingClientRect(); if (!r) return;
-    setSplit(Math.max(2, Math.min(98, ((e.clientX - r.left) / r.width) * 100)));
+    for (const j of [edit, run, ...history.flatMap(h => (h.kind === "remake" ? [h.prev] : []))]) if (j) forgetJob(j.id);
+    if (refUrl) URL.revokeObjectURL(refUrl);
+    if (targetUrl) URL.revokeObjectURL(targetUrl);
+    setRead(null); setRefUrl(null); setPreset(null); setPresets(false); setTargets([]); setTargetUrl(null);
+    setSourceSeconds(null); setFootageJob(null); setTakes(0); setQueued(false);
+    setRun(null); setEdit(null); setHistory([]); setUi(FIRST_UI); setMsgs([HELLO]); setVersion(0);
+    setSheet(false); setTab("looks"); setMenu(null); setNote(null); setScore(null); setScoreError("");
+    setMuted(true); synced.current = null;
   };
 
   if (!restored) return null;
 
   const fp = read?.status === "done" ? read.fingerprint : undefined;
-  const lookReady = read?.status === "done" || !!preset;
-  const lookName = preset?.name ?? read?.name ?? "";
+  const menuEl = menu && (
+    <Menu view={menu} fp={fp} canScore={!!edit} score={score} scoring={scoring} scoreError={scoreError}
+      onView={v => (v === "score" ? runScore() : setMenu(v))} onClose={() => setMenu(null)}
+      onStartOver={startOver} />
+  );
 
-  // ======================================================================
-  // Before anything is made: two slots and one button.
-  // ======================================================================
-  if (!job) {
-    const hint = read?.status === "running"
-      ? targets.length ? "Still reading the reel — nearly there." : "Reading the reel. Drop your footage meanwhile."
-      : !lookReady
-        ? presets
-          ? targets.length ? "Now pick a look." : "Pick a look and drop your footage."
-          : targets.length ? "Now point at a reel you want to look like." : "Needs a reel to copy and some footage of your own."
-        : !targets.length ? "Now drop your own footage." : "";
-
+  // ================================================================ the pair
+  if (!edit && !run) {
     return (
-      <div className="setup">
-        <div className="setup-top">
-          <span className="logo"><span className="dot">H</span><span className="name">Halfheaven</span></span>
-          <ThemeToggle />
-        </div>
-        <div className="setup-inner">
-          <h1 className="display hero">Give your footage<br />someone else&apos;s edit.</h1>
-          <p className="lede">Drop a reel whose editing you like, then your own clips. We&apos;ll cut yours the same way.</p>
-
-          <div className="pair">
-            {presets ? (
-              <div className="tile">
-                <span className="tile-k">Pick a look</span>
-                <div className="presets">
-                  {styles.map(s => (
-                    <button key={s.id} className="preset" aria-pressed={preset?.id === s.id}
-                            onClick={() => choosePreset(s)}>{s.name}</button>
-                  ))}
-                </div>
-                <button className="ln" onClick={() => { setPresets(false); setPreset(null); }}>
-                  or drop a reel instead
-                </button>
-              </div>
-            ) : (
-              <Drop className="tile" onFiles={f => readReference(f[0])}>
-                <span className="tile-k">A reel to copy</span>
-                <span className="tile-t">{refFile ? refFile.name : "Drop an edited reel"}</span>
-                {read?.status === "running" ? <span className="tile-s busy">Reading… {elapsed}s</span>
-                  : read?.status === "done" ? <span className="tile-s good">Read ✓</span>
-                  : read?.status === "error" ? <span className="tile-s bad">{read.error}</span>
-                  : <span className="tile-s">Someone else&apos;s finished video</span>}
-              </Drop>
-            )}
-
-            <Drop className="tile" multiple onFiles={setTargets}>
-              <span className="tile-k">Your footage</span>
-              <span className="tile-t">
-                {targets.length > 1 ? `${targets.length} takes` : targets[0]?.name ?? "Drop your clips"}
-              </span>
-              {targets.length
-                ? <span className="tile-s good">{mb(targets)} · ready ✓</span>
-                : <span className="tile-s">One take or several — it needs sound</span>}
-            </Drop>
-          </div>
-
-          <button className="btn primary go" disabled={!lookReady || !targets.length} onClick={() => start({})}>
-            Edit it like that
-          </button>
-          {/* Say which half is missing rather than leaving a dead button. */}
-          <p className="hint">{hint || " "}</p>
-          {!presets && !refFile && styles.length > 0 && (
-            <button className="ln" onClick={() => setPresets(true)}>No reel? Use a preset look</button>
-          )}
-        </div>
-      </div>
+      <>
+        <Setup refUrl={refUrl} read={read} elapsed={elapsed} fp={fp} presets={presets} styles={styles}
+          preset={preset} targets={targets} targetUrl={targetUrl} sourceSeconds={sourceSeconds} queued={queued}
+          onReel={readReference} onFootage={chooseFootage}
+          onPreset={st => { readSeq.current++; setPreset(st); setRead(null); }}
+          onPresets={on => { setPresets(on); if (!on) setPreset(null); }}
+          onGo={() => (read?.status === "running" ? setQueued(true) : start({}))}
+          onSeeAll={() => setMenu("read")} />
+        <Toast note={note} overSheet={false} onUndo={undo} onGone={() => setNote(null)} />
+        {menuEl}
+      </>
     );
   }
 
-  // ======================================================================
-  // The edit, with everything else one click away.
-  // ======================================================================
-  const running = job.status === "running";
-  const done = job.status === "done";
-  // Comparing against the source only lines up for a single take.
-  const comparing = compare && takes === 1;
-  const r = job.receipt;
+  // ================================================== making it, and the edit
+  const job = edit ?? run!;
+  const footage = targetUrl ?? (real(job.id) ? `/api/jobs/${job.id}/media?v=before` : null);
+  const src = edit ? `/api/jobs/${edit.id}/media?v=after&r=${version}` : footage;
+  const reference = refUrl ?? (real(job.id) ? `/api/jobs/${job.id}/media?v=reference` : null);
+  const original = edit && takes === 1 ? footage : null;
+  const making = !edit && !!run;
+  const remaking = !!edit && !!run;
+  const r = edit?.receipt;
   const saved = r ? Math.max(0, r.sourceSeconds - r.outputSeconds) : 0;
-  const facts = r ? [
-    saved >= 1 && `${saved.toFixed(0)}s shorter`,
-    r.captions > 0 && `${r.captions} captions`,
-    r.wordsCut > 0 && `${r.wordsCut} stumbles cut`,
-  ].filter(Boolean).join(" · ") : "";
-  const pick = (next: Panel) => { setPanel(p => (p === next ? null : next)); setMenu(false); };
+  const facts = r ? [saved >= 1 && `${Math.round(saved)}s shorter`, r.captions > 0 && `${r.captions} captions`,
+    r.wordsCut > 0 && `${r.wordsCut} ${r.wordsCut === 1 ? "stumble" : "stumbles"} cut`].filter(Boolean).join(" · ") : "";
+  const locked = !!applying || !!run;
+  const spent = applying ? Math.max(0, now - applying.startedAt) / 1000 : 0;
+  const remaining = applying ? Math.max(1, Math.round(applying.estimate - spent)) : 0;
+  const fileName = `${(edit?.targetName ?? "edit").replace(/\.[^.]+$/, "")}-edited.mp4`;
+
+  const scrub = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.type === "pointerdown") e.currentTarget.setPointerCapture(e.pointerId);
+    else if (e.buttons === 0) return;
+    const box = e.currentTarget.getBoundingClientRect();
+    const t = Math.max(0, Math.min(1, (e.clientX - box.left) / box.width)) * length;
+    setTime(t);
+    setSeek(k => ({ t, n: (k?.n ?? 0) + 1 }));
+  };
 
   return (
-    <div className="studio">
-      <header className="top">
-        <span className="logo"><span className="dot">H</span><span className="name">Halfheaven</span></span>
-        <span className="what" title={`${lookName} → ${job.targetName}`}>
-          {lookName} <span aria-hidden>→</span> {job.targetName}
-        </span>
-        <span className="spacer" />
-        {(done || panel === "edit") && (
-          <button className="btn sm" aria-pressed={panel === "edit"} onClick={() => pick("edit")}>Edit</button>
-        )}
-        {done && (
-          <a className="btn primary sm" href={`/api/jobs/${job.id}/media?v=after`} download={`edit-${job.id}.mp4`}>
-            Save video
-          </a>
-        )}
-        <ThemeToggle />
-        <div className="menu-wrap">
-          <button className="btn ghost sm more" aria-label="More options" aria-expanded={menu}
-                  onClick={() => setMenu(v => !v)}>⋯</button>
-          {menu && (
-            <>
-              <div className="menu-scrim" onClick={() => setMenu(false)} />
-              <div className="menu" role="menu">
-                {done && takes === 1 && (
-                  <button role="menuitemcheckbox" aria-checked={compare}
-                          onClick={() => { setCompare(v => !v); setMenu(false); }}>
-                    Compare with original{compare ? " ✓" : ""}
-                  </button>
-                )}
-                {fp && <button role="menuitem" onClick={() => pick("read")}>What we read from the reel</button>}
-                {done && <button role="menuitem" onClick={() => { setMenu(false); runScore(); }}>How close did it get?</button>}
-                <button role="menuitem" onClick={startOver}>Start over</button>
-              </div>
-            </>
-          )}
-        </div>
-      </header>
+    <div className={`${s.studio} ${sheet && edit ? s.open : ""}`}>
+      <div className={s.stage}>
+        {src && (
+          <Player src={src} startAt={startAt} muted={muted} original={original} clips={edit?.clips}
+            reference={reference} reelHeld={reelHeld} seek={seek} onWipeDone={onWipeDone}
+            onHeld={() => setHeldOnce(true)} onTime={(t, d) => { setTime(t); setLength(d); }}>
 
-      <div className={`studio-body${panel ? " with-panel" : ""}`}>
-        <main className="stage">
-          <div className="theatre">
-            <div className="screen" ref={screenRef} style={{ ["--split" as string]: `${split}%` }}>
-              {done ? (
-                <>
-                  {comparing && (
-                    <video ref={beforeRef} src={`/api/jobs/${job.id}/media?v=before`} muted loop playsInline autoPlay />
-                  )}
-                  <video ref={afterRef} className={comparing ? "after" : undefined}
-                    src={`/api/jobs/${job.id}/media?v=after&r=${videoKey}`}
-                    muted={!sound} loop playsInline autoPlay
-                    onTimeUpdate={e => { if (comparing) sync(); setPlayhead((e.target as HTMLVideoElement).currentTime); }} />
-                  {comparing && (
-                    <>
-                      <span className="seam" /><span className="grip">↔</span>
-                      <span className="handle" onPointerDown={drag} onPointerMove={drag} />
-                      <span className="tag l">Yours</span>
-                      <span className="tag r">Edited</span>
-                    </>
-                  )}
-                  <button className="sound" aria-pressed={sound} aria-label={sound ? "Mute" : "Turn sound on"}
-                    title={sound ? "Mute" : "Turn sound on"}
-                    onClick={() => { setSound(v => !v); afterRef.current?.play().catch(() => {}); }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden>
-                      <path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor" />
-                      {sound
-                        ? <path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" stroke="currentColor"
-                                strokeWidth="2" fill="none" strokeLinecap="round" />
-                        : <path d="M16 9.5l5 5M21 9.5l-5 5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />}
-                    </svg>
-                  </button>
-                </>
-              ) : (
-                <div className="waiting">
-                  {running ? (
-                    <>
-                      <span className="ring" />
-                      <span className="w-t">
-                        {job.stageIndex < 0 ? `Uploading ${Math.round(uploaded * 100)}%` : DOING[job.stageIndex] ?? "Working"}…
-                      </span>
-                      <span className="bar">
-                        <i style={{ width: `${Math.round((job.stageIndex < 0 ? uploaded * 0.08 : job.progress) * 100)}%` }} />
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="w-t">That didn&apos;t work</span>
-                      <span className="w-s">{job.error || "Try a different video."}</span>
-                      <span className="w-row">
-                        {(footageJob || targets.length > 0) && (
-                          <button className="btn sm" onClick={() => start(overrides)}>Try again</button>
-                        )}
-                        <button className="btn ghost sm" onClick={startOver}>Start over</button>
-                      </span>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {panel === "edit" && done && (
-            <Timeline jobId={job.id} at={playhead} version={videoKey}
-              onSeek={t => {
-                if (afterRef.current) afterRef.current.currentTime = t;
-                setPlayhead(t);
-              }} />
-          )}
-
-          <p className="facts">{done ? facts || " " : " "}</p>
-        </main>
-
-        {panel && (
-          <aside className="panel">
-            {panel === "edit" ? (
-              <>
-                <div className="tabs" role="tablist">
-                  <button className="tab" role="tab" aria-selected={tab === "ask"} onClick={() => setTab("ask")}>Ask</button>
-                  <button className="tab" role="tab" aria-selected={tab === "captions"} onClick={() => setTab("captions")}>Captions</button>
-                  <button className="tab" role="tab" aria-selected={tab === "style"} onClick={() => setTab("style")}>Style</button>
-                  <button className="x" aria-label="Close" onClick={() => setPanel(null)}>×</button>
-                </div>
-
-                {tab === "ask" && (
-                  <>
-                    <div className="chat-log" ref={logRef}>
-                      {msgs.map((m, i) => (
-                        <div key={i} className={`msg ${m.who}`}>
-                          <span className="av">{m.who === "me" ? "You" : "H"}</span>
-                          <span>
-                            <span className="bubble" style={{ display: "block" }}>{m.text}</span>
-                            {m.changed && m.changed.length > 0 && (
-                              <span className="did">{m.changed.map(c => <span key={c}>{label(c)}</span>)}</span>
-                            )}
-                          </span>
-                        </div>
-                      ))}
-                      {thinking && (
-                        <div className="msg bot"><span className="av">H</span>
-                          <span className="bubble thinking"><i /><i /><i /></span></div>
-                      )}
-                    </div>
-                    <div className="chat-foot">
-                      <div className="suggest">
-                        {SUGGESTIONS.map(s => (
-                          <button key={s} className="chip" onClick={() => say(s)} disabled={thinking || running}>{s}</button>
-                        ))}
-                      </div>
-                      <div className="composer">
-                        <textarea rows={1} placeholder="Make the captions pop more…" value={draft}
-                          onChange={e => setDraft(e.target.value)}
-                          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); say(draft); } }} />
-                        <button className="send" aria-label="Send" onClick={() => say(draft)}
-                                disabled={!draft.trim() || thinking || running}>↑</button>
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                {tab === "captions" && <CaptionFixer jobId={job.id} ready={done} onApplied={rerendered} />}
-
-                {tab === "style" && (
-                  <div className="panel-scroll">
-                    <div className="block">
-                      <span className="eyebrow">Caption look{styling ? " — applying…" : ""}</span>
-                      {looks.length ? (
-                        <div className="looks-grid">
-                          {looks.map(l => (
-                            <button key={l.id} className="lk" aria-pressed={look === l.id}
-                              disabled={styling || !done} onClick={() => chooseLook(l.id)}>
-                              <span className="n">{l.label}</span>
-                              <span className="b">{l.blurb}</span>
-                            </button>
-                          ))}
-                        </div>
-                      ) : <span className="tiny">Loading looks…</span>}
-                    </div>
-
-                    <div className="block">
-                      <span className="eyebrow">Type</span>
-                      <TypeControls jobId={job.id} ready={done} version={videoKey} onApplied={rerendered} />
-                    </div>
-
-                    <div className="block">
-                      <span className="eyebrow">Captions and you{placing ? " — placing…" : ""}</span>
-                      <div className="looks-grid">
-                        {SPEAKER_MODES.map(m => (
-                          <button key={m.id} className="lk" aria-pressed={speaker === m.id}
-                            disabled={placing || styling || !done} onClick={() => chooseSpeaker(m.id)}>
-                            <span className="n">{m.label}</span>
-                            <span className="b">{m.blurb}</span>
-                          </button>
-                        ))}
-                      </div>
-                      {speakerNote && <span className="tiny">{speakerNote}</span>}
-                    </div>
-
-                    <div className="block">
-                      <span className="eyebrow">Background</span>
-                      <div className="swatches">
-                        <button className="swatch as-shot" aria-pressed={backdrop === null} aria-label="As shot"
-                          title="As shot" disabled={placing || !done} onClick={() => chooseBackdrop(null)} />
-                        {BACKDROPS.map(c => (
-                          <button key={c} className="swatch" style={{ background: c }} aria-label={c} title={c}
-                            aria-pressed={backdrop?.toLowerCase() === c.toLowerCase()}
-                            disabled={placing || !done} onClick={() => chooseBackdrop(c)} />
-                        ))}
-                        <label className="swatch custom" title="Any colour"
-                          aria-pressed={backdrop !== null && !BACKDROPS.some(c => c.toLowerCase() === backdrop.toLowerCase())}
-                          style={backdrop && !BACKDROPS.includes(backdrop) ? { background: backdrop } : undefined}>
-                          <input ref={picker} type="color" aria-label="Any colour" disabled={placing || !done}
-                            defaultValue={backdrop ?? "#ffffff"} />
-                        </label>
-                      </div>
-                      <span className="tiny">{backdrop ? "Everything behind you becomes this colour" : "Your own background, as shot"}</span>
-                    </div>
-
-                    <div className="block">
-                      <span className="eyebrow">Music{mixing ? " — mixing…" : ""}</span>
-                      <input ref={musicInput} type="file" accept="audio/*" hidden
-                        onChange={e => { setMusic(e.target.files?.[0] ?? null); e.target.value = ""; }} />
-                      {track ? (
-                        <div className="loaded">
-                          <span className="thumb">♪</span>
-                          <span style={{ flex: 1 }}>
-                            <span className="nm" style={{ display: "block" }}>{track}</span>
-                            <span className="tiny">Ducks under your voice</span>
-                          </span>
-                          <button className="btn ghost sm" disabled={mixing} onClick={() => setMusic(null)}>Remove</button>
-                        </div>
-                      ) : (
-                        <button className="drop-zone" disabled={mixing || !done} onClick={() => musicInput.current?.click()}>
-                          <span className="tile-t">Add a track</span>
-                          <span className="tile-s">It ducks under your voice automatically</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </>
-            ) : (
-              <>
-                <div className="panel-head">
-                  <span className="eyebrow">{panel === "read" ? "What we read from the reel" : "How close it got"}</span>
-                  <button className="x" aria-label="Close" onClick={() => setPanel(null)}>×</button>
-                </div>
-                <div className="panel-scroll">
-                  {panel === "read" && fp && <Readout fp={fp} />}
-                  {panel === "score" && (
-                    scoring ? <p className="tiny">Measuring your edit against the reel — this takes a moment.</p>
-                      : scoreError ? <p className="tiny" style={{ color: "var(--bad)" }}>{scoreError}</p>
-                      : score ? <Scorecard score={score} />
-                      : <p className="tiny">Available once the edit is ready.</p>
-                  )}
-                </div>
-              </>
+            {making && (
+              <Making run={run!} uploaded={uploaded} voice={voiceOf(fp)}
+                reelLab={(fp?.grade.lab_mean?.value as number[] | undefined) ?? null}
+                sourceSeconds={sourceSeconds} time={time}
+                matte={run!.facts?.subjectSeconds !== undefined && real(run!.id) ? `/api/jobs/${run!.id}/media?v=matte` : null}
+                onRetry={() => start(ui.overrides)} onStartOver={startOver} />
             )}
-          </aside>
+
+            {edit && <div className={s.shade} />}
+            {(applying || remaking) && <div className={s.sheen} />}
+            {applying && (
+              <div className={s.pillWrap}>
+                <span className={s.pill}>
+                  {applying.label}{applying.label !== "Undoing" && <> · <span className={s.mono}>about {remaining}s</span></>}
+                  <span className={s.pillBar}>
+                    <i style={{ transform: `scaleX(${Math.min(0.9, spent / applying.estimate)})` }} />
+                  </span>
+                </span>
+              </div>
+            )}
+            {remaking && (
+              <div className={s.pillWrap}>
+                <span className={s.pill}>
+                  Remaking your edit
+                  <span className={s.segs} aria-hidden>
+                    {STAGE_NAMES.map((n, i) => <i key={n} className={i < run!.stageIndex ? s.on : i === run!.stageIndex ? s.now : undefined} />)}
+                  </span>
+                </span>
+              </div>
+            )}
+            {revealing && <p className={s.title}>Here&apos;s <em>yours</em>.</p>}
+
+            <div className={`${s.topbar} ${making ? s.belowBars : ""}`}>
+              {reference ? (
+                <button className={s.insetBtn} aria-label="Hold to see the reel you love"
+                  onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); setReelHeld(true); }}
+                  onPointerUp={() => setReelHeld(false)} onPointerCancel={() => setReelHeld(false)}
+                  onContextMenu={e => e.preventDefault()}>
+                  <span className={s.inset}><video src={reference} muted loop playsInline autoPlay /></span>
+                  <span className={s.insetLabel}>Reel you love</span>
+                </button>
+              ) : <span />}
+              <div className={s.tools}>
+                {edit && !heard && !revealing && (
+                  <button className={s.nudge} onClick={() => { setMuted(false); setHeard(true); }}>Tap for sound</button>
+                )}
+                {edit && (
+                  <button className={s.round} aria-label={muted ? "Turn sound on" : "Mute"}
+                          onClick={() => { setMuted(m => !m); setHeard(true); }}>
+                    <Sound on={!muted} size={18} />
+                  </button>
+                )}
+                <button className={s.round} aria-label="More" onClick={() => setMenu("menu")}><More size={20} /></button>
+              </div>
+            </div>
+
+            {edit && !revealing && (
+              <div className={s.bottom}>
+                {takes === 1 && !heldOnce && !sheet && (
+                  <span className={s.hintPill}><Touch size={16} />Hold the video to see your original</span>
+                )}
+                {facts && <p className={s.facts}>{facts}</p>}
+                <div className={s.scrub} onPointerDown={scrub} onPointerMove={scrub} role="slider"
+                     aria-label="Seek" aria-valuemin={0} aria-valuemax={Math.round(length)} aria-valuenow={Math.round(time)}>
+                  <span className={s.scrubbed} style={{ width: `${length ? (time / length) * 100 : 0}%` }} />
+                </div>
+                <div className={s.actions}>
+                  <button className={s.secondary} aria-pressed={sheet} onClick={() => setSheet(v => !v)}>
+                    <Sliders size={18} />Edit
+                  </button>
+                  <SaveButton key={`${edit.id}-${version}`} src={`/api/jobs/${edit.id}/media?v=after&r=${version}`} name={fileName} />
+                </div>
+              </div>
+            )}
+          </Player>
         )}
       </div>
+
+      {sheet && edit && (
+        <Sheet tab={tab} onTab={setTab} onClose={() => setSheet(false)} flush={tab === "ask"}>
+          {tab === "looks" && (
+            <LooksTab jobId={edit.id} version={version} current={ui.look} applying={applyingLook}
+              landed={landedLook} disabled={locked} onChoose={chooseLook} />
+          )}
+          {tab === "ask" && <AskTab msgs={msgs} thinking={thinking} busy={locked || thinking} onSay={ask} />}
+          {tab === "type" && (
+            <fieldset disabled={locked} className={s.plain}>
+              <TypeControls jobId={edit.id} ready version={version}
+                onStart={() => begin("Setting your type")} onApplied={() => landed("Type updated")} onFailed={failed} />
+            </fieldset>
+          )}
+          {tab === "you" && (
+            <YouTab speaker={ui.speaker} backdrop={ui.backdrop} disabled={locked}
+              onSpeaker={chooseSpeaker} onBackdrop={chooseBackdrop} />
+          )}
+          {tab === "words" && (
+            <fieldset disabled={locked} className={s.plain}>
+              <CaptionFixer key={`${edit.id}-${version}`} jobId={edit.id} ready
+                onStart={() => begin("Fixing your captions")} onApplied={() => landed("Captions fixed")} onFailed={failed} />
+            </fieldset>
+          )}
+          {tab === "music" && (
+            <MusicTab track={ui.track} disabled={locked} onFile={f => setMusic(f)} onRemove={() => setMusic(null)} />
+          )}
+        </Sheet>
+      )}
+
+      <Toast note={note} overSheet={sheet && !!edit} onUndo={undo} onGone={() => setNote(null)} />
+      {menuEl}
     </div>
   );
-}
-
-/** Turn a settings path into something a creator recognises. */
-function label(path: string) {
-  const map: Record<string, string> = {
-    "captions.size_pct": "caption size",
-    "captions.anchor": "caption position",
-    "captions.fill_hex": "caption colour",
-    "captions.max_words": "words per line",
-    "captions.all_caps": "capitals",
-    "emphasis.size_pct": "punch size",
-    "trim.aggressiveness": "how much is cut",
-    "trim.max_silence": "pauses",
-    "punch.rate": "how often it zooms",
-    "punch.scale_mean": "zoom amount",
-    "grade.strength": "colour",
-  };
-  return map[path] ?? path.split(".").pop()!;
 }

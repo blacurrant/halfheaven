@@ -38,7 +38,56 @@ export type Job = {
   segments?: number;
   punchAt?: number[];
   clips?: { start: number; end: number }[];
+  /** What each stage has reported so far, for the studio to say out loud. */
+  facts?: Facts;
+  /** When each stage began, in ms from the start of the job. */
+  stageAt?: number[];
 };
+
+/** The pipeline's own report lines, read as they arrive. Nothing here is
+ *  estimated: a fact exists only once the stage that owns it has printed it. */
+export type Facts = {
+  words?: number;
+  sourceSeconds?: number;
+  cuts?: number;
+  wordsCut?: number;
+  cards?: number;
+  punches?: number;
+  emphasised?: number;
+  reframed?: boolean;
+  /** Mean LAB of the footage, and of the reel it is being graded toward. */
+  gradeFrom?: [number, number, number];
+  gradeTo?: [number, number, number];
+  subjectSeconds?: number;
+  subjectMissing?: string;
+  captionsMoved?: number;
+  clips?: number;
+  outputSeconds?: number;
+  captions?: number;
+};
+
+const LAB = String.raw`\(([-\d.]+), ([-\d.]+), ([-\d.]+)\)`;
+const FACTS: [RegExp, (m: RegExpExecArray, f: Facts) => void][] = [
+  [new RegExp(`^grade LAB mean=${LAB}`), (m, f) => { f.gradeTo = [+m[1], +m[2], +m[3]]; }],
+  [/^(\d+) words over ([\d.]+)s/, (m, f) => { f.words = +m[1]; f.sourceSeconds = +m[2]; }],
+  [/^(\d+) cuts removing (\d+) words, (\d+) caption cards, (\d+) punch-ins, (\d+) emphasised words/,
+    (m, f) => Object.assign(f, { cuts: +m[1], wordsCut: +m[2], cards: +m[3], punches: +m[4], emphasised: +m[5] })],
+  [/^reframing /, (_m, f) => { f.reframed = true; }],
+  [new RegExp(`^grade: target LAB mean=${LAB}`), (m, f) => { f.gradeFrom = [+m[1], +m[2], +m[3]]; }],
+  [/^subject separated in (\d+)s/, (m, f) => { f.subjectSeconds = +m[1]; }],
+  [/^no subject separation: (.*)/, (m, f) => { f.subjectMissing = m[1]; }],
+  [/^captions \w+ the speaker: (\d+) moved/, (m, f) => { f.captionsMoved = +m[1]; }],
+  [/^(\d+) clips, ([\d.]+)s \(from [\d.]+s\), (\d+) captions/,
+    (m, f) => Object.assign(f, { clips: +m[1], outputSeconds: +m[2], captions: +m[3] })],
+];
+
+export function readFacts(line: string, facts: Facts) {
+  const text = line.trim();
+  for (const [pattern, take] of FACTS) {
+    const m = pattern.exec(text);
+    if (m) { take(m, facts); return; }
+  }
+}
 
 export type Receipt = {
   clips: number;
@@ -91,23 +140,121 @@ export function jobPaths(id: string) {
            out: path.join(dir, "out.mp4"), work: dir };
 }
 
-/** Re-render after a caption fix. Deliberately not the pipeline:
- *  re-transcribing would discard the correction that prompted it. */
-export function recut(id: string, edits: unknown[]): Promise<void> {
-  const { program, out, work } = jobPaths(id);
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      PYTHON,
-      ["-u", "-m", "halfheaven.recut", "--program", program,
-       "--out", out, "--work", work, "--edits", JSON.stringify(edits)],
-      { cwd: REPO, env: { ...process.env, PYTHONUNBUFFERED: "1",
-                          PYTHONPATH: path.join(REPO, "packages", "pipeline") } }
-    );
-    let err = "";
+const PIPELINE_ENV = { ...process.env, PYTHONUNBUFFERED: "1", PYTHONPATH: path.join(REPO, "packages", "pipeline") };
+
+// ---- versions -------------------------------------------------------------
+// Every change a creator makes re-renders the edit in place. The version it
+// replaces is kept first, so Undo is a file copy rather than another render,
+// and a render that fails puts the old version straight back instead of
+// leaving a program that no longer matches the video.
+
+const KEEP_VERSIONS = 8;
+const VERSIONED = ["out.mp4", "edit_program.json", "style_profile.json"];
+const versionsDir = (id: string) => path.join(jobPaths(id).work, "versions");
+
+function versions(id: string): number[] {
+  try {
+    return fs.readdirSync(versionsDir(id)).filter((n) => /^\d+$/.test(n)).map(Number).sort((a, b) => a - b);
+  } catch { return []; }
+}
+
+function keepVersion(id: string): boolean {
+  if (id === "demo") return false;   // the demo points at the repo's own files
+  const { work } = jobPaths(id);
+  const kept = versions(id);
+  const at = path.join(versionsDir(id), String((kept.at(-1) ?? 0) + 1));
+  fs.mkdirSync(at, { recursive: true });
+  for (const name of VERSIONED) {
+    const from = path.join(work, name);
+    if (fs.existsSync(from)) fs.copyFileSync(from, path.join(at, name));
+  }
+  for (const old of kept.slice(0, Math.max(0, kept.length + 1 - KEEP_VERSIONS))) {
+    fs.rmSync(path.join(versionsDir(id), String(old)), { recursive: true, force: true });
+  }
+  return true;
+}
+
+/** Put the most recent kept version back. False when there is none. */
+function restoreVersion(id: string): boolean {
+  const latest = versions(id).at(-1);
+  if (latest === undefined) return false;
+  const { work } = jobPaths(id);
+  const at = path.join(versionsDir(id), String(latest));
+  for (const name of VERSIONED) {
+    const from = path.join(at, name);
+    if (fs.existsSync(from)) fs.copyFileSync(from, path.join(work, name));
+  }
+  fs.rmSync(at, { recursive: true, force: true });
+  return true;
+}
+
+export const undoCount = (id: string) => versions(id).length;
+
+// One change at a time per edit: two renders writing the same out.mp4 would
+// leave whichever finished last, and a program that describes the other.
+const applying = new Set<string>();
+export const isApplying = (id: string) => applying.has(id);
+export const BUSY = -1;
+
+/** Re-render an edit in place with `halfheaven.recut` and the given flags. */
+export async function runRecut(id: string, args: string[]): Promise<{ code: number; err: string }> {
+  if (applying.has(id)) return { code: BUSY, err: "Another change is still applying." };
+  applying.add(id);
+  try {
+    const { program, out, work } = jobPaths(id);
+    const kept = keepVersion(id);
+    const result = await new Promise<{ code: number; err: string }>((resolve) => {
+      let err = "";
+      const child = spawn(PYTHON,
+        ["-u", "-m", "halfheaven.recut", "--program", program, "--out", out, "--work", work, ...args],
+        { cwd: REPO, env: PIPELINE_ENV });
+      child.stderr.on("data", (b) => (err += b.toString()));
+      child.on("close", (code) => resolve({ code: code ?? 1, err }));
+    });
+    if (result.code !== 0 && kept) restoreVersion(id);
+    return result;
+  } finally {
+    applying.delete(id);
+  }
+}
+
+/** Step back one change. */
+export function undo(id: string): { ok: boolean; left: number; error?: string } {
+  if (applying.has(id)) return { ok: false, left: undoCount(id), error: "A change is still applying." };
+  const ok = restoreVersion(id);
+  return { ok, left: undoCount(id), error: ok ? undefined : "Nothing to undo." };
+}
+
+// ---- look previews ----------------------------------------------------------
+
+export type LookPreview = { id: string; label: string; blurb: string; file: string };
+
+/** A still of every caption look on this edit, drawn by the real renderer.
+ *  Redrawn only when the program has changed since the last set. */
+export async function lookPreviews(id: string): Promise<{ looks: LookPreview[]; version: number }> {
+  const { program, work } = jobPaths(id);
+  const dir = path.join(work, "previews");
+  const version = Math.round(fs.statSync(program).mtimeMs);
+  const manifest = path.join(dir, "manifest.json");
+  try {
+    const kept = JSON.parse(fs.readFileSync(manifest, "utf8"));
+    if (kept.version === version) return kept;
+  } catch { /* none yet */ }
+
+  const looks = await new Promise<LookPreview[]>((resolve, reject) => {
+    let out = "", err = "";
+    const child = spawn(PYTHON,
+      ["-m", "halfheaven.previews", "--program", program, "--work", work, "--out-dir", dir],
+      { cwd: REPO, env: PIPELINE_ENV });
+    child.stdout.on("data", (b) => (out += b.toString()));
     child.stderr.on("data", (b) => (err += b.toString()));
-    child.on("close", (code) =>
-      code === 0 ? resolve() : reject(new Error(err.slice(-400) || `recut exited ${code}`)));
+    child.on("close", (code) => {
+      try { if (code === 0) return resolve(JSON.parse(out.trim().split("\n").pop() || "[]")); } catch { /* below */ }
+      reject(new Error(err.trim().split("\n").pop() || `previews exited ${code}`));
+    });
   });
+  fs.writeFileSync(manifest, JSON.stringify({ looks, version }));
+  return { looks, version };
 }
 
 /** Reference videos available as styles. Real files, real cached profiles. */
@@ -160,6 +307,8 @@ export async function startJob(opts: {
     targetPaths: opts.targetPaths,
     startedAt: Date.now(),
     log: [],
+    facts: {},
+    stageAt: [0],
   };
   jobs.set(id, job);
   saveJob(job);
@@ -187,6 +336,9 @@ export async function startJob(opts: {
       if (stage !== null) {
         job.stageIndex = stage;
         job.progress = 0.08 + (0.9 * stage) / STAGES.length;
+        job.stageAt![stage] = Date.now() - job.startedAt;
+      } else {
+        readFacts(line, job.facts!);
       }
     }
   };
@@ -227,6 +379,9 @@ export async function startJob(opts: {
       };
       job.status = "done";
       job.progress = 1;
+      // The look this edit was first made with, so "Matched" can bring it back
+      // after any other look has replaced it.
+      fs.copyFileSync(path.join(dir, "style_profile.json"), path.join(dir, "style_profile.matched.json"));
     } catch (e) {
       job.status = "error";
       job.error = `finished but produced no readable program: ${(e as Error).message}`;

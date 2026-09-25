@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Halfheaven launch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Plus+Jakarta+Sans:wght@600;700;800&display=block" rel="stylesheet">
+<style>
+  /* brand tokens, from apps/web/src/app/globals.css */
+  :root{
+    --paper:#EFE5D2; --card:#F7F1E5; --raised:#FBF7EF; --ink:#574B55; --muted:#665962;
+    --line-2:#CDBFA8; --accent:#C3D3E2; --accent-ink:#46607B; --on-accent:#4A3F49;
+    --theatre:#2E2630; --cream:#EFE5D2;
+    --display:"Bricolage Grotesque",sans-serif; --ui:"Plus Jakarta Sans",sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:#000;overflow:hidden}
+  body.preview{display:grid;place-items:center;min-height:100vh}
+  #stage{position:relative;width:1080px;height:1920px;overflow:hidden;background:var(--theatre);
+    font-family:var(--ui);-webkit-font-smoothing:antialiased}
+  body.preview #stage{transform:scale(var(--fit,0.45));transform-origin:center}
+  .abs,.scene,#bg>div{position:absolute}
+  .scene{inset:0}
+  #bg,#bg>div{position:absolute;inset:0}
+  #world{position:absolute;inset:0}
+  .w{display:inline-block;will-change:transform}
+
+  /* S1 payoff: the reel you love, your raw clip, your clip in that style */
+  .payHead{position:absolute;left:40px;right:40px;top:340px;text-align:center;font-family:var(--display);
+    font-weight:800;font-size:112px;line-height:1.02;letter-spacing:-.025em;color:var(--cream)}
+  .hl{color:var(--accent)}
+  .ph{position:absolute;top:640px;width:400px;height:711px;border-radius:60px;padding:10px;background:#1B161C;
+    box-shadow:0 0 0 2px rgba(239,229,210,.14),0 50px 80px -40px rgba(0,0,0,.8)}
+  .ph .screen{inset:10px;border-radius:50px}
+  #phL{left:100px} #phR{left:580px}
+  .ph .cap{font-size:34px} .ph .cap b{font-size:54px}
+  .ph .caps{font-size:36px} .ph .caps .big{font-size:44px}
+  #payArrow{position:absolute;left:490px;top:946px;width:100px;height:100px;border-radius:50%;background:var(--accent);
+    color:var(--on-accent);display:grid;place-items:center;box-shadow:0 0 0 10px var(--theatre);z-index:2}
+  .phLabel{position:absolute;top:1388px;width:400px;text-align:center;color:#DCD2CB;font-weight:800;font-size:36px}
+  #labL{left:100px} #labR1,#labR2{left:580px} #labR2{color:var(--accent)}
+
+  /* S2 the loop */
+  .loopHead{position:absolute;left:40px;right:40px;top:300px;text-align:center;font-family:var(--display);
+    font-weight:800;font-size:112px;line-height:1.02;letter-spacing:-.025em;color:var(--ink)}
+  #card{position:absolute;left:150px;top:600px;width:380px;height:676px;border-radius:56px;padding:10px;
+    background:var(--theatre);box-shadow:0 50px 80px -40px rgba(46,38,48,.7)}
+  #card .screen{inset:10px;border-radius:46px}
+  #cardDrain{background:linear-gradient(165deg,#9A9794 0%,#7B7775 55%,#5F5B5C 100%)}
+  .reelNo{position:absolute;left:50%;top:40px;transform:translateX(-50%);padding:12px 26px;border-radius:99px;
+    background:var(--raised);color:var(--ink);font-weight:800;font-size:32px;white-space:nowrap;z-index:2}
+  .tally{position:absolute;left:590px;top:640px;width:420px}
+  .tally .n{font-family:var(--display);font-weight:800;font-size:120px;line-height:1;letter-spacing:-.03em;
+    color:var(--ink);font-variant-numeric:tabular-nums;white-space:nowrap}
+  #tallyMoney .n{font-size:104px}
+  .tally p{margin:8px 0 44px;font-weight:700;font-size:38px;color:var(--muted)}
+  .loopSub{position:absolute;left:0;right:0;top:1340px;text-align:center;font-family:var(--display);font-weight:800;
+    font-size:84px;letter-spacing:-.02em;color:var(--accent-ink)}
+
+  /* S3 the stop */
+  .once{position:absolute;left:0;right:0;top:690px;text-align:center;font-family:var(--display);font-weight:800;
+    font-size:230px;line-height:.98;letter-spacing:-.035em;color:var(--cream)}
+
+  /* logo, which carries on as a header */
+  #logo{position:absolute;left:0;right:0;top:0;height:0;z-index:20}
+  #logo .in{position:absolute;left:0;top:0;display:flex;align-items:center;gap:40px;
+    transform-origin:0 0;white-space:nowrap}
+  #logo .mark{width:170px;height:170px;border-radius:52px;background:var(--accent);color:var(--on-accent);
+    display:grid;place-items:center;font-family:var(--display);font-weight:800;font-size:104px;flex:none}
+  #logo .word{font-family:var(--display);font-weight:700;font-size:140px;letter-spacing:-.025em;color:var(--ink)}
+  #ring{position:absolute;left:540px;top:900px;width:10px;height:10px;border-radius:50%;
+    border:10px solid var(--accent)}
+  #tagline{position:absolute;left:0;right:0;top:1080px;text-align:center;font-family:var(--display);
+    font-weight:700;font-size:58px;letter-spacing:-.015em;color:var(--ink)}
+  #tagline b{font-weight:800;color:var(--accent-ink)}
+
+  /* S5 demo */
+  #s5{transform:scale(1.12);transform-origin:540px 540px}
+  .step{position:absolute;left:0;right:0;top:296px;display:flex;justify-content:center;align-items:center;gap:22px;
+    color:var(--ink);font-family:var(--display);font-weight:800;font-size:58px;letter-spacing:-.015em;white-space:nowrap}
+  .step i{width:74px;height:74px;border-radius:50%;display:grid;place-items:center;background:var(--accent);
+    color:var(--on-accent);font-family:var(--display);font-style:normal;font-weight:800;font-size:42px}
+  #phone{position:absolute;left:305px;top:400px;width:470px;height:836px;border-radius:70px;padding:12px;
+    background:var(--theatre);box-shadow:0 60px 90px -40px rgba(46,38,48,.7),0 0 0 2px rgba(46,38,48,.1)}
+  .screen{position:absolute;inset:12px;border-radius:58px;overflow:hidden;background:#555}
+  .layer{position:absolute;inset:0}
+  .frame{position:absolute;inset:0;transform-origin:50% 52%}
+  .gold{background:linear-gradient(165deg,#D8BC7C 0%,#8A6326 55%,#2E2630 100%)}
+  .flat{background:linear-gradient(165deg,#9A9794 0%,#7B7775 55%,#5F5B5C 100%)}
+  .lamp{position:absolute;right:-60px;top:120px;width:260px;height:260px;border-radius:50%;
+    background:radial-gradient(circle,rgba(255,236,190,.75),rgba(255,236,190,0) 70%)}
+  .flat .lamp{background:radial-gradient(circle,rgba(230,230,230,.35),rgba(230,230,230,0) 70%)}
+  .subject{position:absolute;left:50%;bottom:0;width:78%;height:50%;transform:translateX(-50%)}
+  .subject::before{content:"";position:absolute;left:50%;top:0;width:40%;aspect-ratio:1;border-radius:50%;
+    transform:translateX(-50%);background:rgba(24,19,25,.55)}
+  .subject::after{content:"";position:absolute;left:0;right:0;bottom:0;height:62%;
+    border-radius:48% 48% 0 0/70% 70% 0 0;background:rgba(24,19,25,.55)}
+  .flat .subject{left:58%;width:70%;height:46%}
+  .flat .subject::before,.flat .subject::after{background:rgba(60,58,58,.55)}
+  .bars{position:absolute;top:26px;left:30px;right:30px;display:flex;gap:6px}
+  .bars i{flex:1;height:5px;border-radius:5px;background:rgba(255,255,255,.3);overflow:hidden}
+  .bars i b{display:block;height:100%;background:#FBF7EF;transform-origin:left}
+  .tag{position:absolute;left:28px;top:56px;padding:9px 18px;border-radius:99px;background:rgba(24,19,25,.45);
+    color:#FBF7EF;font-weight:800;font-size:24px;letter-spacing:.08em;text-transform:uppercase}
+  .cap{position:absolute;left:6%;right:6%;top:24%;text-align:center;color:#FBF7EF;font-family:var(--display);
+    font-weight:800;font-size:40px;line-height:1.08;text-shadow:0 3px 0 rgba(24,19,25,.35),0 4px 22px rgba(0,0,0,.45)}
+  .cap b{display:block;margin-top:4px;font-size:64px;line-height:1;letter-spacing:-.02em;color:#FBF7EF}
+  .caps{position:absolute;left:0;right:0;top:22%;text-align:center;color:#FBF7EF;font-family:var(--display);
+    font-weight:800;font-size:42px;line-height:1.1;text-shadow:0 3px 0 rgba(24,19,25,.35),0 4px 22px rgba(0,0,0,.45);transform-origin:50% 40%}
+  .caps .w{margin:0 5px}
+  .caps .big{display:block;margin:2px 0;font-size:52px;letter-spacing:-.02em;white-space:nowrap;color:#FFE7A8}
+  .scanline{position:absolute;left:-10px;right:-10px;top:0;height:6px;background:var(--accent);
+    box-shadow:0 0 30px 10px rgba(195,211,226,.65)}
+  .scanwash{position:absolute;left:0;right:0;top:0;background:linear-gradient(rgba(195,211,226,0),rgba(195,211,226,.28))}
+  .wipeEdge{position:absolute;top:-20%;height:140%;width:8px;background:#FBF7EF;
+    box-shadow:0 0 40px 14px rgba(255,240,205,.8);transform-origin:50% 50%}
+  .flash{position:absolute;inset:0;background:#FBF7EF}
+  .toast{position:absolute;left:50%;top:60px;padding:14px 26px;border-radius:99px;background:var(--raised);
+    color:var(--ink);font-weight:800;font-size:28px;white-space:nowrap;box-shadow:0 10px 30px -10px rgba(0,0,0,.4)}
+  .toast span{color:var(--accent-ink)}
+
+  .chip{position:absolute;width:240px;padding:22px 22px 24px;border-radius:30px;background:var(--raised);
+    border:2px solid var(--line-2);box-shadow:0 24px 40px -24px rgba(46,38,48,.45)}
+  .chip p{font-weight:800;font-size:25px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink)}
+  #chipCuts{left:90px;top:470px} #chipType{left:750px;top:540px} #chipColour{left:90px;top:850px}
+  .rhythm{margin-top:18px;height:84px;display:flex;align-items:flex-end;gap:10px}
+  .rhythm i{flex:1;height:100%;border-radius:6px;background:var(--accent-ink);transform-origin:bottom}
+  .aa{margin-top:6px;font-family:var(--display);font-weight:800;font-size:100px;line-height:1;letter-spacing:-.02em;
+    color:var(--accent-ink)}
+  .swatches{margin-top:18px;display:flex;gap:12px}
+  .swatches i{width:56px;height:56px;border-radius:50%;box-shadow:inset 0 0 0 2px rgba(0,0,0,.08)}
+
+  #strip{position:absolute;left:305px;top:1266px;width:470px;height:10px;border-radius:10px;background:var(--line-2)}
+  #strip .fill{position:absolute;inset:0;border-radius:10px;background:var(--accent-ink);transform-origin:left}
+  #strip .cut{position:absolute;top:-12px;width:6px;height:34px;border-radius:4px;background:var(--ink)}
+
+  #chat{position:absolute;left:110px;top:1300px;width:860px;height:116px;border-radius:99px;background:var(--raised);
+    border:2px solid var(--line-2);box-shadow:0 24px 40px -24px rgba(46,38,48,.45);display:flex;align-items:center;
+    padding:0 20px 0 44px;font-weight:700;font-size:44px;color:var(--ink)}
+  #chat .ph{position:absolute;left:46px;color:#8E8088;font-weight:600}
+  #chat .caret{background:var(--accent-ink);height:1em}
+  #chat .send{margin-left:auto;width:80px;height:80px;border-radius:50%;background:var(--accent);display:grid;
+    place-items:center;color:var(--on-accent);flex:none}
+  #bubble{position:absolute;left:520px;top:1290px;padding:24px 36px;border-radius:40px 40px 10px 40px;
+    background:var(--accent);color:var(--on-accent);font-weight:800;font-size:40px;white-space:nowrap}
+  #touch{position:absolute;width:110px;height:110px;margin:-55px 0 0 -55px;border-radius:50%;
+    border:6px solid rgba(251,247,239,.95);background:rgba(251,247,239,.25);box-shadow:0 0 0 2px rgba(46,38,48,.25);z-index:30}
+
+  /* S6 end */
+  .end1{position:absolute;left:0;right:0;top:660px;text-align:center;color:var(--cream);font-family:var(--display);
+    font-weight:800;font-size:92px;letter-spacing:-.025em}
+  .end2{position:absolute;left:0;right:0;top:770px;text-align:center;font-family:var(--display);
+    font-weight:800;font-size:112px;color:var(--accent);letter-spacing:-.025em}
+  .price{position:absolute;left:0;right:0;top:1020px;text-align:center;color:#DCD2CB;font-weight:600;font-size:50px}
+  .price b{color:var(--cream);font-weight:800}
+  .btn{position:absolute;left:220px;width:640px;top:1150px;height:140px;border-radius:99px;background:var(--accent);
+    color:var(--on-accent);display:flex;align-items:center;justify-content:center;gap:18px;font-weight:800;
+    font-size:54px;letter-spacing:-.01em}
+  .bio{position:absolute;left:0;right:0;top:1350px;text-align:center;color:#DCD2CB;font-weight:800;font-size:40px;
+    letter-spacing:.1em;text-transform:uppercase}
+
+  #grain{position:absolute;inset:0;opacity:.05;mix-blend-mode:overlay;pointer-events:none;z-index:50}
+  #vignette{position:absolute;inset:0;pointer-events:none;z-index:49;
+    background:radial-gradient(ellipse 80% 70% at 50% 48%,rgba(0,0,0,0) 60%,rgba(0,0,0,.16) 100%)}
+
+  #controls{position:fixed;left:0;right:0;bottom:0;display:none;gap:12px;align-items:center;padding:12px 16px;
+    background:#111;color:#ddd;font:14px system-ui}
+  body.preview #controls{display:flex}
+  #controls input{flex:1}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="bg"><div id="bgBase"></div><div id="bgWipe"></div></div>
+  <div id="world">
+
+    <div id="s1" class="scene">
+      <div class="payHead" id="payHead1"><span class="w">Love</span> <span class="w">how</span> <span class="w">that</span><br><span class="w">reel</span> <span class="w">looks?</span></div>
+      <div class="payHead" id="payHead2"><span class="w">Now</span> <span class="w hl">yours</span><br><span class="w">does</span> <span class="w">too.</span></div>
+      <div class="ph" id="phL"><div class="screen"><div class="layer gold"><div class="lamp"></div><div class="subject"></div>
+        <p class="cap">how I got my <b>first client</b></p><div class="scanwash"></div><div class="scanline"></div></div></div></div>
+      <div class="ph" id="phR"><div class="screen">
+        <div class="layer flat"><div class="lamp"></div><div class="subject"></div></div>
+        <div class="layer gold" id="phRstyled"><div class="lamp"></div><div class="subject"></div>
+          <div class="caps"><span class="w">bhai,</span><span class="w">yeh</span><span class="w big">game-changer</span><span class="w">hai</span></div></div>
+        <div class="wipeEdge"></div></div></div>
+      <div id="payArrow"><svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+      <p class="phLabel" id="labL">The reel you love</p>
+      <p class="phLabel" id="labR1">Your raw clip</p>
+      <p class="phLabel" id="labR2">Your clip, that style</p>
+    </div>
+
+    <div id="s2" class="scene">
+      <div class="loopHead" id="loopHead1"><span class="w">Editing it</span><br><span class="w">yourself?</span></div>
+      <div class="loopHead" id="loopHead2"><span class="w">Paying an</span><br><span class="w">editor?</span></div>
+      <div id="card"><div class="screen">
+        <div class="layer flat"><div class="subject"></div></div>
+        <div class="layer gold" id="cardStyled"><div class="lamp"></div><div class="subject"></div></div>
+        <div class="layer" id="cardDrain"><div class="subject"></div></div></div>
+        <span class="reelNo">Reel #1</span></div>
+      <div class="tally" id="tallyTime"><div class="n" id="tallyReels">#1</div><p>reel, same edit</p>
+        <div class="n" id="tallyHours">3 hrs</div><p>of your evenings</p></div>
+      <div class="tally" id="tallyMoney"><div class="n">₹10–30k</div><p>every month</p></div>
+      <p class="loopSub" id="loopSub1">3 hours. Every reel.</p>
+      <p class="loopSub" id="loopSub2">Until they leave.</p>
+    </div>
+
+    <div id="s3" class="scene"><div class="once"><span class="w">Do it</span><br><span class="w hl">once.</span></div></div>
+
+    <div id="s4" class="scene">
+      <div id="ring"></div>
+      <p id="tagline">One edit you love. <b>Every video after.</b></p>
+    </div>
+
+    <div id="s5" class="scene">
+      <div class="step"><i>1</i><span>Pick a reel you love</span></div>
+      <div class="step"><i>2</i><span>Drop your raw footage</span></div>
+      <div class="step"><i>3</i><span>Get it back in that style</span></div>
+      <div class="step"><i>4</i><span>Change it in plain words</span></div>
+
+      <div id="phone"><div class="screen">
+        <div class="layer gold" id="ref"><div class="lamp"></div><div class="subject"></div>
+          <div class="bars"><i><b></b></i><i><b></b></i><i><b></b></i></div>
+          <span class="tag">Reference</span>
+          <p class="cap">how I got my <b>first client</b></p>
+          <div class="scanwash"></div><div class="scanline"></div>
+        </div>
+        <div class="layer flat" id="raw"><div class="lamp"></div><div class="subject"></div><span class="tag">Raw</span></div>
+        <div class="layer" id="styled"><div class="frame gold"><div class="lamp"></div><div class="subject"></div></div>
+          <div class="caps"><span class="w">bhai,</span><span class="w">yeh</span><span class="w big">game-changer</span><span class="w">hai</span></div>
+          <div class="bars"><i><b></b></i><i><b></b></i><i><b></b></i></div>
+          <div class="flash"></div>
+          <div class="toast">Captions bigger <span>✓</span></div>
+        </div>
+        <div class="wipeEdge"></div>
+      </div></div>
+
+      <div class="chip" id="chipCuts"><p>Cut rhythm</p><div class="rhythm"><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+      <div class="chip" id="chipType"><p>Captions</p><div class="aa">Aa</div></div>
+      <div class="chip" id="chipColour"><p>Colour</p><div class="swatches"><i style="background:#D8BC7C"></i><i style="background:#8A6326"></i><i style="background:#2E2630"></i></div></div>
+
+      <div id="strip"><div class="fill"></div><div class="cut"></div><div class="cut"></div></div>
+
+      <div id="chat"><span class="ph">Tell it what to change…</span><span class="text"></span><span class="caret"></span>
+        <div class="send"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div></div>
+      <div id="bubble">bigger captions</div>
+    </div>
+
+    <div id="s6" class="scene">
+      <div class="end1"><span class="w">Your style, saved.</span></div>
+      <div class="end2"><span class="w">On every video.</span></div>
+      <p class="price"><span class="w">Early access from <b>₹999/month</b></span></p>
+      <div class="btn">Join the waitlist
+        <svg width="50" height="50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+      <p class="bio">Link in bio</p>
+    </div>
+
+    <div id="logo"><div class="in"><div class="mark">H</div><div class="word">Halfheaven</div></div></div>
+  </div>
+  <div id="touch"></div>
+  <div id="vignette"></div>
+  <div id="grain"></div>
+</div>
+
+<div id="controls"><button id="play">Play</button><input id="scrub" type="range" min="0" max="1000" value="0"><span id="clock">0.00s</span></div>
+
+<script type="module">
+  import { seek, ready } from "./scenes.mjs";
+  import { renderSoundtrack, toWav } from "./audio.mjs";
+  import { DURATION } from "./cues.mjs";
+
+  window.seek = seek;
+  window.ready = ready;
+  // for render.mjs: the soundtrack as a base64 WAV
+  window.bakeAudio = async () => {
+    const bytes = toWav(await renderSoundtrack(48000));
+    let s = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return btoa(s);
+  };
+
+  // open with ?preview to watch it with sound, scrub, or ?t=12.4 to hold a frame
+  const q = new URLSearchParams(location.search);
+  await ready();
+  if (q.has("t")) seek(+q.get("t"));
+  else seek(0);
+  if (q.has("preview")) {
+    document.body.classList.add("preview");
+    const fit = () => document.body.style.setProperty("--fit", Math.min(innerWidth / 1080, (innerHeight - 60) / 1920));
+    fit(); addEventListener("resize", fit);
+    const scrub = document.getElementById("scrub"), clock = document.getElementById("clock");
+    let audio, ac, src, t0 = 0, from = 0, playing = false;
+    const show = (t) => { seek(t); scrub.value = (t / DURATION) * 1000; clock.textContent = t.toFixed(2) + "s"; };
+    const stop = () => { playing = false; src?.stop(); };
+    document.getElementById("play").onclick = async () => {
+      if (playing) return stop();
+      ac ??= new AudioContext();
+      audio ??= await renderSoundtrack(ac.sampleRate);
+      src = ac.createBufferSource(); src.buffer = audio; src.connect(ac.destination);
+      src.start(0, from); t0 = ac.currentTime - from; playing = true;
+      const tick = () => {
+        if (!playing) return;
+        const t = ac.currentTime - t0;
+        if (t >= DURATION) { stop(); from = 0; return; }
+        show(t); from = t; requestAnimationFrame(tick);
+      };
+      tick();
+    };
+    scrub.oninput = () => { stop(); from = (scrub.value / 1000) * DURATION; show(from); };
+  }
+  document.body.dataset.ready = "1";
+</script>
+</body>
+</html>

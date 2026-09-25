@@ -1,6 +1,4 @@
-import { spawn } from "node:child_process";
-import path from "node:path";
-import { REPO, jobPaths } from "@/lib/pipeline";
+import { BUSY, runRecut } from "@/lib/pipeline";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // Vercel Hobby's ceiling; Next does not enforce it locally
@@ -27,19 +25,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     args.push("--background", body.background ?? "none");
   }
   if (!args.length) return Response.json({ error: "Nothing to change." }, { status: 400 });
-  const { program, out, work } = jobPaths(id);
 
-  const code = await new Promise<number>((resolve) => {
-    const child = spawn(
-      path.join(REPO, ".venv", "bin", "python"),
-      ["-u", "-m", "halfheaven.recut", "--program", program, "--out", out,
-       "--work", work, ...args],
-      { cwd: REPO, env: { ...process.env, PYTHONUNBUFFERED: "1",
-                          PYTHONPATH: path.join(REPO, "packages", "pipeline") } }
-    );
-    child.on("close", (c) => resolve(c ?? 1));
-  });
-
+  const { code, err } = await runRecut(id, args);
+  if (code === BUSY) return Response.json({ error: err }, { status: 409 });
   if (code === 3) {
     return Response.json(
       { error: "This edit was made before speaker separation. Make it again to use this." },

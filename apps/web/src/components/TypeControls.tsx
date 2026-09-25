@@ -72,8 +72,12 @@ function cssFor(type: Type, family: string): React.CSSProperties {
 /** A creator's own caption type, for normal words and for the ones that pop.
  *  Changes are drafted here and previewed live; Apply renders once. */
 export default function TypeControls({
-  jobId, ready, version, onApplied,
-}: { jobId: string; ready: boolean; version: number; onApplied: () => void }) {
+  jobId, ready, version, onApplied, onStart, onFailed,
+}: {
+  jobId: string; ready: boolean; version: number; onApplied: () => void;
+  /** Told when a render starts and when one fails, for a page that shows it. */
+  onStart?: () => void; onFailed?: (why: string) => void;
+}) {
   const [faces, setFaces] = useState<Face[]>([]);
   const [saved, setSaved] = useState<Record<Side, Type> | null>(null);
   const [draft, setDraft] = useState<Record<Side, Type> | null>(null);
@@ -124,13 +128,16 @@ export default function TypeControls({
   const dirty = Object.keys(patch).length > 0;
 
   const apply = async () => {
-    setBusy(true); setError("");
+    setBusy(true); setError(""); onStart?.();
     try {
       const r = await fetch(`/api/jobs/${jobId}/type`, {
         method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(patch),
       });
       const d = await r.json().catch(() => ({}));
-      if (r.ok) { setSaved(draft); onApplied(); } else setError(d.error ?? "That didn't apply.");
+      if (r.ok) { setSaved(draft); onApplied(); }
+      else { setError(d.error ?? "That didn't apply."); onFailed?.(d.error ?? "That didn't apply."); }
+    } catch {
+      setError("That didn't apply."); onFailed?.("That didn't apply.");
     } finally { setBusy(false); }
   };
 

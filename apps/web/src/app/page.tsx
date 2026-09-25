@@ -16,10 +16,10 @@ import s from "./landing.module.css";
  */
 
 export const metadata: Metadata = {
-  title: "Halfheaven: your editor’s style, on every video",
+  title: "Halfheaven: see a reel you love? Your videos can look like that",
   description:
-    "Get one video edited the way you love. Halfheaven edits every video after it to match - the cuts, captions, " +
-    "colour and pace - for a fraction of what an editor costs.",
+    "Point Halfheaven at any reel you love. It edits your raw footage to match - the cuts, captions, colour and " +
+    "pace - and keeps that look for every video after, for a fraction of what an editor costs.",
 };
 
 // ---- icons ------------------------------------------------------------------
@@ -170,7 +170,7 @@ function Stage() {
   return (
     <div className={s.stage} aria-hidden>
       <div className={s.col}>
-        <span className={s.phoneLabel}>The one you love</span>
+        <span className={s.phoneLabel}>A reel you love</span>
         <Phone tone={s.toneA} line="building a brand from" word="zero" />
       </div>
       <div className={s.bridge}><span><Arrow /></span><em>Same look</em></div>
@@ -214,10 +214,14 @@ export default function Landing() {
         <section className={`${s.wrap} ${s.hero}`}>
           <div>
             <span className={s.pill}><i>Early access</i> Made for Indian creators</span>
-            <h1 className={s.h1}>Your editor’s style, on <em>every</em> video.</h1>
+            <h1 className={s.h1}>
+              <span className={s.h1Ask}>See a reel you love?</span>
+              Your videos can look like <em>that</em>.
+            </h1>
             <p className={s.lede}>
-              Get one video edited the way you love. Halfheaven learns that edit (the cuts, the captions, the
-              colour, the pace) and edits every video after it to match, for a fraction of what an editor costs.
+              Point Halfheaven at any reel, or one your editor made. It reads the cuts, the captions, the colour
+              and the pace, and edits your raw footage to match. Save the look and every video after it matches
+              too, for a fraction of what an editor costs.
             </p>
             <div className={s.ctas}>
               <a href="#waitlist" className="btn primary">Join the waitlist</a>

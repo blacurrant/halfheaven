@@ -31,6 +31,18 @@ TYPE_FIELDS = {"fill_hex", "size_pct", "font_file", "font_weight", "all_caps",
 MIN_SIZE, MAX_SIZE = 0.015, 0.2
 # Which program style each side of the control edits.
 TYPE_SIDES = {"body": ("captions", "default"), "pop": ("emphasis", "emphasis")}
+# The look an edit was first made with, measured from the reel. Kept beside the
+# program as style_profile.matched.json so any other look can be undone by name.
+MATCHED = "matched"
+
+
+def matched_look(profile: StyleProfile, program_path: pathlib.Path) -> StyleProfile:
+    """`profile` wearing the captions it was first made with, when they were kept."""
+    original = program_path.parent / "style_profile.matched.json"
+    if not original.exists():
+        return profile
+    first = StyleProfile.model_validate_json(original.read_text())
+    return profile.model_copy(update={"captions": first.captions, "emphasis": first.emphasis})
 
 
 def apply_type(profile: StyleProfile, program: EditProgram,
@@ -115,7 +127,8 @@ def main(argv: list[str] | None = None) -> int:
         profile_path = program_path.parent / "style_profile.json"
         profile = (StyleProfile.model_validate_json(profile_path.read_text())
                    if profile_path.exists() else StyleProfile())
-        profile = apply_preset(profile, args.preset)
+        profile = (matched_look(profile, program_path) if args.preset == MATCHED
+                   else apply_preset(profile, args.preset))
         profile_path.write_text(profile.model_dump_json(indent=2))
         program = program.model_copy(update={
             "styles": {"default": profile.captions, "emphasis": profile.emphasis}})

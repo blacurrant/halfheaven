@@ -1,7 +1,5 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs";
-import path from "node:path";
-import { REPO, jobPaths } from "@/lib/pipeline";
+import { BUSY, jobPaths, runRecut } from "@/lib/pipeline";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // Vercel Hobby's ceiling; Next does not enforce it locally
@@ -24,26 +22,13 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const patch = await req.json();
-  const { program, out, work } = jobPaths(id);
-
-  const result = await new Promise<{ code: number; err: string }>((resolve) => {
-    let err = "";
-    const child = spawn(
-      path.join(REPO, ".venv", "bin", "python"),
-      ["-u", "-m", "halfheaven.recut", "--program", program, "--out", out,
-       "--work", work, "--type", JSON.stringify(patch)],
-      { cwd: REPO, env: { ...process.env, PYTHONUNBUFFERED: "1",
-                          PYTHONPATH: path.join(REPO, "packages", "pipeline") } }
-    );
-    child.stderr.on("data", (b) => (err += b.toString()));
-    child.on("close", (c) => resolve({ code: c ?? 1, err }));
-  });
-
-  if (result.code === 4) {
-    const why = /type not applied: (.*)/.exec(result.err)?.[1] ?? "That setting isn't allowed.";
+  const { code, err } = await runRecut(id, ["--type", JSON.stringify(patch)]);
+  if (code === BUSY) return Response.json({ error: err }, { status: 409 });
+  if (code === 4) {
+    const why = /type not applied: (.*)/.exec(err)?.[1] ?? "That setting isn't allowed.";
     return Response.json({ error: why }, { status: 400 });
   }
-  return result.code === 0
+  return code === 0
     ? Response.json({ ok: true, at: Date.now() })
     : Response.json({ error: "That didn't apply. Try again." }, { status: 500 });
 }
