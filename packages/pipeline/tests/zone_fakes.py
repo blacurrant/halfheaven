@@ -28,3 +28,22 @@ def tiny_parts(rgb, t_ms):
     classes = np.full(rgb.shape[:2], BACKGROUND, np.uint8)
     classes[:10, :10] = FACE_SKIN
     return classes
+
+
+from halfheaven.schemas import SkinTone, ZoneLook, ZoneTone
+
+
+def make_tone(center, spread=50.0, chroma=8.0, tint=(0.0, 0.0), shadow_a=None):
+    """A zone whose L runs evenly from center-spread to center+spread, clipped to 0..100."""
+    quantiles = np.clip(np.linspace(center - spread, center + spread, 101), 0.0, 100.0)
+    return ZoneTone(l_quantiles=[float(v) for v in quantiles], mean_l=float(quantiles.mean()),
+                    median_chroma=chroma, tints=[tuple(tint)] * 6, shadow_tint_a=shadow_a)
+
+
+def make_look(subject_l=50.0, background_l=50.0, skin_l=45.0, skin_ab=(14.0, 16.0),
+              subject_chroma=8.0, background_chroma=8.0, background_tint=(0.0, 0.0), skin=True):
+    return ZoneLook(
+        subject=make_tone(subject_l, chroma=subject_chroma),
+        background=make_tone(background_l, chroma=background_chroma, tint=background_tint),
+        skin=SkinTone(ab=skin_ab, mean_l=skin_l, median_l=skin_l) if skin else None,
+    )

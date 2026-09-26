@@ -159,6 +159,32 @@ class ZoneLook(BaseModel):
     skin: SkinTone | None = None
 
 
+class ZoneControls(BaseModel):
+    """One zone's grade: a tone curve on L, a saturation scale and a tint shift."""
+
+    # Output L at each point of plan.colourist.GRID (L 0..100 in 201 steps).
+    curve: list[float] = Field(min_length=201, max_length=201)
+    saturation: float
+    # Near-neutral tint per L band of analyze.zones.BANDS: the take's and the reference's.
+    tint_take: list[tuple[float, float]] = Field(min_length=6, max_length=6)
+    tint_ref: list[tuple[float, float]] = Field(min_length=6, max_length=6)
+
+
+class GradeControls(BaseModel):
+    """A colourist's controls, read from a reference, every one scaled by `strength`."""
+
+    strength: float = Field(ge=0.0, le=1.0)
+    # One (a, b) offset for every pixel, aimed by the skin; and the hue turn it makes.
+    white_balance_ab: tuple[float, float] = (0.0, 0.0)
+    white_balance_deg: float = 0.0
+    # The reference's tonal layout is scaled by this so its skin sits where
+    # this creator's skin already is.
+    exposure_anchor: float = 1.0
+    subject: ZoneControls
+    background: ZoneControls
+    skin_chroma: float = 1.0
+
+
 class Look(BaseModel):
     """The reference's appearance, applied to the whole program.
 
