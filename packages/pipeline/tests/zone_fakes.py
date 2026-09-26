@@ -30,6 +30,17 @@ def tiny_parts(rgb, t_ms):
     return classes
 
 
+LETTERBOXED = FIXTURES / "letterboxed_bars_0.1496.mp4"   # colour bars inside ~15% black bars
+
+
+def middle_person(rgb, t_ms):
+    """MediaPipe stand-in: a person filling the middle third of the picture."""
+    classes = np.full(rgb.shape[:2], BACKGROUND, np.uint8)
+    width = rgb.shape[1]
+    classes[:, int(width * 0.34): int(width * 0.66)] = FACE_SKIN
+    return classes
+
+
 from halfheaven.schemas import SkinTone, ZoneLook, ZoneTone
 
 
@@ -66,6 +77,13 @@ class LeftHalf:
 class Nothing:
     def mask_for(self, frame):
         return np.zeros(frame.shape[:2], np.uint8)
+
+
+class Everything:
+    """A skin mask that spills over the whole frame, the way a coarse one spills past a face."""
+
+    def mask_for(self, frame):
+        return np.full(frame.shape[:2], 255, np.uint8)
 
 
 def identity_lut(path):

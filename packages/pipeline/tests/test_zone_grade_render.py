@@ -4,7 +4,7 @@ import pytest
 from halfheaven.analyze.segment import write_matte_video
 from halfheaven.render.video import extract_frame, render
 from halfheaven.schemas import Canvas, EditProgram, Look, TakeMatte, VideoClip, ZoneGrade
-from tests.zone_fakes import BARS, LeftHalf, Nothing, dark_lut, gray, identity_lut
+from tests.zone_fakes import BARS, Everything, LeftHalf, Nothing, dark_lut, gray, identity_lut
 
 BASE = dict(canvas=Canvas(width=320, height=568, fps=30),
             video=[VideoClip(src=str(BARS), start=0.0, end=2.0)])
@@ -45,6 +45,19 @@ def test_skin_keeps_its_brightness_when_the_subject_is_darkened(tmp_path):
                    tmp_path, "zoned")
     assert zoned[0] == pytest.approx(plain[0], abs=10), "skin takes 90% of its own (identity) LUT"
     assert zoned[1] == pytest.approx(plain[1], abs=4)
+
+
+def test_skin_outside_the_subject_takes_the_backgrounds_grade(tmp_path):
+    # MediaPipe's skin mask is coarse and spills past the person: the room it
+    # covered kept its own brightness and left a light ring round faces.
+    grade = ZoneGrade(subject_lut=str(identity_lut(tmp_path / "i.cube")),
+                      background_lut=str(dark_lut(tmp_path / "d.cube")),
+                      skin_lut=str(identity_lut(tmp_path / "k.cube")))
+    plain = halves(EditProgram(**BASE), tmp_path, "plain")
+    zoned = halves(EditProgram(**BASE, look=Look(zone_grade=grade, mattes=mattes(tmp_path, Everything()))),
+                   tmp_path, "zoned")
+    assert zoned[0] == pytest.approx(plain[0], abs=4)
+    assert zoned[1] < plain[1] - 10, "a skin mask over the room does not shield the room from its grade"
 
 
 def test_a_missing_matte_falls_back_to_the_single_lut(tmp_path):

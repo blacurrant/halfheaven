@@ -29,7 +29,7 @@ from halfheaven.plan.overrides import apply_overrides
 from halfheaven.plan.subject_captions import place_around_subject
 from halfheaven.plan.grade import describe_controls, global_lut_for, zone_grade_for
 from halfheaven.render.video import mask_track, render
-from halfheaven.schemas import Canvas, Look
+from halfheaven.schemas import Canvas, Look, StyleProfile
 
 
 def write_heard(work: pathlib.Path, transcript: Transcript) -> pathlib.Path:
@@ -54,6 +54,15 @@ def write_decided(work: pathlib.Path, decisions) -> pathlib.Path:
         "punch": list(decisions.punch_word_indices),
     }))
     return path
+
+
+def profile_json(profile: StyleProfile) -> str:
+    """The profile as style_profile.json holds it, which is what the studio's
+    chat sends with every message. The reference's zone table stays out: it is
+    thousands of characters the chat cannot use, and a reply that nulled it
+    would silently turn the colourist grade off. Every run reads it afresh
+    from the fingerprint."""
+    return profile.model_dump_json(indent=2, exclude={"grade": {"zones"}})
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -114,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
         patch = json.loads(args.overrides)
         profile = apply_overrides(profile, patch)
         print(f"      adjusted: {', '.join(sorted(patch))}")
-    (work / "style_profile.json").write_text(profile.model_dump_json(indent=2))
+    (work / "style_profile.json").write_text(profile_json(profile))
 
     takes = list(args.target)
     label = takes[0] if len(takes) == 1 else f"{len(takes)} takes"

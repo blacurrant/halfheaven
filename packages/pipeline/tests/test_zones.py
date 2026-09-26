@@ -4,11 +4,12 @@ import subprocess
 import numpy as np
 import pytest
 
+from halfheaven.analyze.framing import detect_letterbox
 from halfheaven.analyze.segment import write_matte_video
 from halfheaven.analyze.zones import read_zone_look, reference_zone_look, summarise, take_zone_look
 from halfheaven.media.ffmpeg_bin import ffmpeg
 from halfheaven.schemas import TakeMatte
-from tests.zone_fakes import WIDE, Bright, ellipse_parts, tiny_parts
+from tests.zone_fakes import LETTERBOXED, WIDE, Bright, ellipse_parts, middle_person, tiny_parts
 
 TIMES = [0.1 + 0.3 * i for i in range(14)]      # inside the 4.4s fixture
 
@@ -92,3 +93,11 @@ def test_a_reference_is_read_through_its_parts():
 
 def test_a_reference_whose_person_is_tiny_has_no_zones():
     assert reference_zone_look(WIDE, TIMES, parts=tiny_parts) is None
+
+
+def test_a_letterboxed_references_bars_are_not_its_room():
+    # Counted as room, the bars dragged the background median from 39 to 23,
+    # so every take graded toward that reference came out too dark.
+    look = reference_zone_look(LETTERBOXED, TIMES, parts=middle_person,
+                               framing=detect_letterbox(LETTERBOXED))
+    assert look.background.l_quantiles[50] > 35

@@ -14,6 +14,7 @@ from typing import Callable, Iterable, Iterator
 import cv2
 import numpy as np
 
+from halfheaven.analyze.framing import Framing
 from halfheaven.analyze.matte import BACKGROUND, BODY_SKIN, FACE_SKIN
 from halfheaven.schemas import SkinTone, TakeMatte, ZoneLook, ZoneTone
 
@@ -167,7 +168,7 @@ def take_zone_look(takes: list[str], mattes: dict[str, TakeMatte]) -> ZoneLook |
 
 
 def reference_zone_look(path: str | pathlib.Path, times: list[float],
-                        parts: PartsFn | None = None) -> ZoneLook | None:
+                        parts: PartsFn | None = None, framing: Framing | None = None) -> ZoneLook | None:
     """The reference at `times` (seconds). None unless a person fills >= 5% of >= 10 frames."""
     owned = None
     if parts is None:
@@ -188,6 +189,11 @@ def reference_zone_look(path: str | pathlib.Path, times: list[float],
             ok, frame = capture.read()
             if not ok:
                 continue
+            if framing is not None:
+                # Letterbox bars are black and neutral: counted as the room
+                # they would read as a crushed, darker background than it is.
+                top, bottom = framing.content_rows(frame.shape[0])
+                frame = frame[top:bottom]
             small = shrink(frame)
             height, width = small.shape[:2]
             classes = cv2.resize(parts(cv2.cvtColor(small, cv2.COLOR_BGR2RGB), ms), (width, height),

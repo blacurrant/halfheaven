@@ -838,10 +838,13 @@ def _grade_zones(path: pathlib.Path, stats: list[FrameStats],
     if len(usable) >= 10:
         picks = np.unique(np.linspace(0, len(usable) - 1, min(60, len(usable))).astype(int))
         try:
-            look = reference_zone_look(path, [usable[p].t for p in picks], parts=parts)
+            look = reference_zone_look(path, [usable[p].t for p in picks], parts=parts,
+                                       framing=detect_letterbox(path))
             why = "no person in enough photographic frames"
-        except (ImportError, OSError, RuntimeError) as error:
-            why = f"subject separation unavailable: {error}"
+        except Exception as error:  # noqa: BLE001 - a native model's failure costs the zones only
+            # Before the zones, reading a reference needed no segmenter at all;
+            # whatever MediaPipe raises must not take the whole fingerprint down.
+            why = f"subject separation failed: {type(error).__name__}: {error}"
     if look is None:
         return {name: Reading.absent(why) for name in ZONE_READINGS}, None
     readings = {name: Reading.absent("too few pixels to read") if value is None else Reading(value)

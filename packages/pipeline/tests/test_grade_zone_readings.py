@@ -2,7 +2,7 @@
 from halfheaven.analyze.fingerprint import Confidence, FrameStats, _grade_zones
 from halfheaven.plan.typography import apply_fingerprint
 from halfheaven.schemas import StyleProfile, ZoneLook
-from tests.zone_fakes import WIDE, ellipse_parts
+from tests.zone_fakes import LETTERBOXED, WIDE, ellipse_parts, middle_person
 
 
 def photo(t):
@@ -22,6 +22,21 @@ def test_without_enough_photography_the_zone_readings_are_absent():
     readings, look = _grade_zones(WIDE, [photo(0.5)] * 3, parts=ellipse_parts)
     assert look is None
     assert all(r.confidence is Confidence.ABSENT for r in readings.values())
+
+
+def test_a_failing_segmenter_costs_the_zones_not_the_fingerprint():
+    def broken(rgb, t_ms):
+        raise ValueError("Input timestamp must be monotonically increasing.")
+
+    readings, look = _grade_zones(WIDE, [photo(0.1 + 0.3 * i) for i in range(14)], parts=broken)
+    assert look is None
+    assert all(r.confidence is Confidence.ABSENT for r in readings.values())
+    assert "ValueError" in readings["background_l"].note
+
+
+def test_a_letterboxed_reference_is_read_inside_its_bars():
+    readings, _ = _grade_zones(LETTERBOXED, [photo(0.1 + 0.3 * i) for i in range(14)], parts=middle_person)
+    assert readings["background_l"].value > 35
 
 
 def test_the_profile_carries_the_reference_zones():

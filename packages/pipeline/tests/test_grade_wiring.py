@@ -1,4 +1,5 @@
 """Which grade a render gets, and what it is baked from."""
+import json
 import pathlib
 
 from halfheaven.analyze.segment import write_matte_video
@@ -32,6 +33,16 @@ def test_no_zones_means_no_colourist_grade(tmp_path):
 
 def test_a_take_without_a_skin_matte_keeps_the_single_grade(tmp_path):
     assert zone_grade_for(zoned_profile(), [str(WIDE)], ellipse_mattes(tmp_path, skin=False), tmp_path) is None
+
+
+def test_the_saved_profile_leaves_the_zone_table_out():
+    # style_profile.json goes with every studio chat message: the zone table
+    # was ~4,900 characters of floats, and a chat reply could null it.
+    from halfheaven.cli import profile_json
+
+    saved = json.loads(profile_json(zoned_profile()))
+    assert "zones" not in saved["grade"]
+    assert saved["grade"]["measured"] is True
 
 
 def test_the_single_lut_is_baked_only_for_a_measured_reference(tmp_path):

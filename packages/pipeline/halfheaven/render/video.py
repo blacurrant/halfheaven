@@ -224,9 +224,11 @@ def grade_filters(grade: ZoneGrade, source: str, subject: str, skin: str, height
     """The colourist grade as filtergraph steps: `source` graded into `out`.
 
     Three LUTs run side by side. The subject's is laid over the background's
-    through a copy of the subject matte pulled inside the edge and feathered,
-    then the skin's over that through the skin matte. `subject` and `skin` are
-    matte streams on the same frame grid as `source`; `height` is its height.
+    through a feathered copy of the subject matte, then the skin's over that
+    through the skin matte - limited to the subject, because MediaPipe's skin
+    mask is coarse and spills onto the room, where it left a light ring round
+    faces. `subject` and `skin` are matte streams on the same frame grid as
+    `source`; `height` is its height.
     """
     def lut(path: str) -> str:
         return f"lut3d=file='{path}':interp=tetrahedral"
@@ -240,11 +242,12 @@ def grade_filters(grade: ZoneGrade, source: str, subject: str, skin: str, height
         f"{source}split=3[zs][zb][zk]",
         f"[zb]{lut(grade.background_lut)}[zbg]",
         f"[zs]{lut(grade.subject_lut)},format=yuva420p[zsg]",
-        f"{subject}{matte}[zsm]",
+        f"{subject}{matte},split=2[zsm][zsn]",
         "[zsg][zsm]alphamerge[zsa]",
         "[zbg][zsa]overlay=0:0[zz]",
         f"[zk]{lut(grade.skin_lut)},format=yuva420p[zkg]",
-        f"{skin}format=gray,lut=c0='val*{grade.skin_weight:.3f}'[zkm]",
+        f"{skin}format=gray[zk1]",
+        f"[zk1][zsn]blend=all_mode=multiply,lut=c0='val*{grade.skin_weight:.3f}'[zkm]",
         "[zkg][zkm]alphamerge[zka]",
         f"[zz][zka]overlay=0:0{out}",
     ]
