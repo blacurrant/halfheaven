@@ -78,6 +78,7 @@ def flicker(frames: list[np.ndarray], raw_frames: list[np.ndarray], alphas: list
 
 
 ZONE_TRAITS = ("face_above_background", "background_l", "skin_chroma", "skin_hue", "shadow_tint")
+MAX_CANVAS = 1280
 SEAM_FRAMES = 8
 FLICKER_STARTS = (0.2, 0.5, 0.8)
 FLICKER_RUN = 8
@@ -153,6 +154,18 @@ def edge_and_flicker(take: str, output: pathlib.Path, matte: TakeMatte) -> dict[
     return {"seam": _mean(gaps), "flicker_room": _mean(room), "flicker_face": _mean(face)}
 
 
+def _canvas(info) -> Canvas:
+    """The take's own frame, capped where the pipeline caps it.
+
+    The pipeline renders at the reference's size, which is 1280 or less on the
+    long side for every reel here; rendering a 4K take at 4K made one pair of
+    the matrix take a quarter of an hour and measured nothing a creator sees.
+    """
+    scale = min(1.0, MAX_CANVAS / max(info.width, info.height))
+    return Canvas(width=int(info.width * scale) // 2 * 2, height=int(info.height * scale) // 2 * 2,
+                  fps=info.fps)
+
+
 def _reference_summary(fingerprint: dict) -> dict[str, float | None]:
     grade = fingerprint.get("grade") or {}
     return {name: (grade.get(name) or {}).get("value") for name in ZONE_TRAITS}
@@ -174,7 +187,7 @@ def evaluate_pair(take: str, matte: TakeMatte, reference: dict, out_dir: str | p
     if strength is not None:
         profile = profile.model_copy(update={"grade": profile.grade.model_copy(update={"strength": strength})})
     info = probe(take)
-    canvas = Canvas(width=info.width // 2 * 2, height=info.height // 2 * 2, fps=info.fps)
+    canvas = _canvas(info)
     clip = VideoClip(src=take, start=0.0, end=info.duration)
     mattes = {take: matte}
     today = Look(mattes=mattes, skin_protect=profile.subject.skin_protect)

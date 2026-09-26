@@ -74,6 +74,17 @@ def test_a_matte_left_half_written_by_a_crashed_run_is_not_reused(tmp_path):
     assert not _usable_matte(stub, str(WIDE))
 
 
+def test_a_4k_take_is_scored_at_the_size_the_pipeline_renders():
+    from types import SimpleNamespace
+
+    from halfheaven.analyze.grade_eval import _canvas
+
+    four_k = _canvas(SimpleNamespace(width=2160, height=3840, fps=30.0))
+    phone = _canvas(SimpleNamespace(width=768, height=576, fps=24.0))
+    assert (four_k.width, four_k.height) == (720, 1280)
+    assert (phone.width, phone.height) == (768, 576)
+
+
 def test_a_reference_without_zones_is_scored_as_a_fallback(tmp_path):
     matte = write_matte_video(WIDE, Bright(), tmp_path / "m.mp4", feather=0)
     fingerprint = fake_fingerprint()
