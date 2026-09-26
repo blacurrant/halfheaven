@@ -194,10 +194,12 @@ class ZoneGrade(BaseModel):
     # Skin takes this share of the skin LUT over the subject/background blend.
     skin_weight: float = Field(default=0.9, ge=0.0, le=1.0)
     # The grade's copy of the subject matte is pulled this far inside the edge,
-    # then feathered, both as shares of frame height. Pulling in puts any rim
-    # on the hair, where it barely shows, instead of on the wall.
-    choke_pct: float = Field(default=0.005, ge=0.0, le=0.05)
-    feather_pct: float = Field(default=0.005, ge=0.0, le=0.05)
+    # then feathered, both as shares of frame height. Tuned on the evaluation
+    # matrix (3 takes x 4 references): pulling in by 0.5% put a rim of up to
+    # 9 L on the hair wherever the two zones' grades differ, and 0.2% still
+    # left 6 of 12 pairs over the 2 L bar; centred on the edge, 11 of 12 held.
+    choke_pct: float = Field(default=0.0, ge=0.0, le=0.05)
+    feather_pct: float = Field(default=0.004, ge=0.0, le=0.05)
     # What the LUTs were baked from, for display and later editing.
     controls: GradeControls | None = None
 

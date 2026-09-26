@@ -113,8 +113,10 @@ def test_the_colourist_grade_runs_three_luts_through_the_mattes(tmp_path):
     command = build_finish_command(program(look=zone_look(tmp_path)), tmp_path / "b.mp4",
                                    tmp_path / "o.mp4", tmp_path, subject_track=subject, skin_track=skin)
     graph = graph_of(command)
-    assert graph.count("lut3d") == 3
-    assert "erosion" in graph and graph.count("alphamerge") == 2
+    assert graph.count("lut3d") == 3 and graph.count("alphamerge") == 2
+    # Tuned on the evaluation matrix: the grade matte is feathered on the edge,
+    # not pulled inside it, which put a rim on the hair wherever the zones differ.
+    assert "erosion" not in graph and "gblur" in graph
     assert command.count(str(subject)) == 1 and command.count(str(skin)) == 1
 
 
