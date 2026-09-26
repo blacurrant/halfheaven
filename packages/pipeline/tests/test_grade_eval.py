@@ -36,3 +36,38 @@ def test_flicker_is_what_the_grade_adds_over_the_footage():
     assert flicker(steady, raw, alphas, skins)["room"] == pytest.approx(0.0)
     assert flicker(pumping, raw, alphas, skins)["room"] == pytest.approx(3.0)
     assert flicker(steady, raw, alphas, skins)["face"] is None
+
+
+from halfheaven.analyze.grade_eval import evaluate_pair, verdict
+from halfheaven.analyze.segment import write_matte_video
+from halfheaven.analyze.zones import summarise
+from halfheaven.schemas import TakeMatte
+from tests.zone_fakes import WIDE, Bright, make_look
+
+
+def fake_fingerprint():
+    look = make_look(subject_l=60.0, background_l=40.0, skin_l=70.0, skin_ab=(12.0, 18.0))
+    reading = lambda value: {"value": value, "confidence": "measured", "note": ""}
+    return {"source": "fake.mp4",
+            "grade": {"lab_mean": reading([35.0, 6.0, 4.0]), "lab_std": reading([15.0, 8.0, 9.0]),
+                      **{name: reading(value) for name, value in summarise(look).items()}},
+            "zone_look": look.model_dump()}
+
+
+def test_a_pair_is_rendered_both_ways_and_measured(tmp_path):
+    matte = write_matte_video(WIDE, Bright(), tmp_path / "m.mp4", feather=0)
+    report = evaluate_pair(str(WIDE), TakeMatte(subject=str(matte), skin=str(matte)),
+                           fake_fingerprint(), tmp_path / "pair")
+    assert (tmp_path / "pair" / "today.mp4").exists() and (tmp_path / "pair" / "colourist.mp4").exists()
+    assert report["colourist"]["background_l"] > report["raw"]["background_l"] + 5
+    assert {"seam", "flicker_room", "flicker_face", "face_l_change", "render_seconds"} <= set(report["colourist"])
+    assert verdict([report])["fallback_pairs"] == []
+
+
+def test_a_reference_without_zones_is_scored_as_a_fallback(tmp_path):
+    matte = write_matte_video(WIDE, Bright(), tmp_path / "m.mp4", feather=0)
+    fingerprint = fake_fingerprint()
+    fingerprint.pop("zone_look")
+    report = evaluate_pair(str(WIDE), TakeMatte(subject=str(matte), skin=str(matte)), fingerprint, tmp_path / "pair")
+    assert "colourist" not in report and "today" in report
+    assert verdict([report])["fallback_pairs"] == [f"{WIDE} x fake.mp4"]
