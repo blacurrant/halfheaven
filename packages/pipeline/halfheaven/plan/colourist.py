@@ -39,13 +39,15 @@ SMOOTH = 13
 Zone = Literal["subject", "background", "skin"]
 
 
-def tone_curve(take_q: list[float], ref_q: list[float], anchor: float) -> list[float]:
+def tone_curve(take_q: list[float], ref_q: list[float], anchor: float,
+               fixed: float | None = None) -> list[float]:
     """Output L on GRID: the take's L quantiles mapped onto the reference's, scaled by `anchor`.
 
     Beyond the range the take showed, the footage keeps its own contrast
     (slope 1) instead of being flattened: a highlight in a frame that was not
-    sampled should not be crushed. Then smoothed, slope-limited, and shifted so
-    the take's median still lands where the unlimited curve put it.
+    sampled should not be crushed. Then smoothed, slope-limited, and shifted:
+    so that `fixed` maps to itself when given (the face, for the subject), or
+    else so the take's median lands where the unlimited curve put it.
     """
     take = np.maximum.accumulate(np.asarray(take_q, float) + np.arange(101) * 1e-4)
     ref = np.clip(np.asarray(ref_q, float) * anchor, 0.0, 100.0)
@@ -57,8 +59,11 @@ def tone_curve(take_q: list[float], ref_q: list[float], anchor: float) -> list[f
     step = np.diff(GRID)
     slope = np.clip(np.diff(raw) / step, *SLOPE_RANGE)
     curve = np.concatenate([[raw[0]], raw[0] + np.cumsum(slope * step)])
-    median = take[50]
-    curve += np.interp(median, GRID, raw) - np.interp(median, GRID, curve)
+    if fixed is None:
+        median = take[50]
+        curve += np.interp(median, GRID, raw) - np.interp(median, GRID, curve)
+    else:
+        curve += fixed - np.interp(fixed, GRID, curve)
     return [float(v) for v in np.clip(curve, 0.0, 100.0)]
 
 
@@ -79,10 +84,11 @@ def _white_balance(take: SkinTone | None, ref: SkinTone | None) -> tuple[tuple[f
     return (float(offset[0]), float(offset[1])), float(np.degrees(turn))
 
 
-def _zone(zone: str, take: ZoneTone, ref: ZoneTone, anchor: float) -> ZoneControls:
+def _zone(zone: str, take: ZoneTone, ref: ZoneTone, anchor: float,
+          fixed: float | None = None) -> ZoneControls:
     low, high = SATURATION_RANGE[zone]
     saturation = float(np.clip(ref.median_chroma / max(take.median_chroma, 1e-3), low, high))
-    return ZoneControls(curve=tone_curve(take.l_quantiles, ref.l_quantiles, anchor),
+    return ZoneControls(curve=tone_curve(take.l_quantiles, ref.l_quantiles, anchor, fixed),
                         saturation=saturation, tint_take=list(take.tints), tint_ref=list(ref.tints))
 
 
@@ -92,10 +98,14 @@ def plan_grade(take: ZoneLook, ref: ZoneLook, strength: float) -> GradeControls:
     anchor = 1.0
     if take.skin is not None and ref.skin is not None and ref.skin.median_l > 1e-3:
         anchor = float(np.clip(take.skin.median_l / ref.skin.median_l, *ANCHOR_RANGE))
+    # The subject's curve pivots on the face, so the face keeps its brightness
+    # even where the skin matte is soft or misses it: a bright shirt would
+    # otherwise set the subject's level and drag the face down with it.
+    face = take.skin.median_l if take.skin is not None else None
     controls = GradeControls(
         strength=strength, white_balance_ab=white_balance, white_balance_deg=turn,
         exposure_anchor=anchor,
-        subject=_zone("subject", take.subject, ref.subject, anchor),
+        subject=_zone("subject", take.subject, ref.subject, anchor, fixed=face),
         background=_zone("background", take.background, ref.background, anchor),
     )
     if take.skin is None or ref.skin is None:

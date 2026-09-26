@@ -71,6 +71,19 @@ def test_skin_keeps_its_own_brightness_while_the_room_is_crushed():
     assert apply_controls(wall, controls, "background")[0, 0, 0] < 25.0
 
 
+def test_the_subject_curve_leaves_the_face_where_it_was():
+    # A bright shirt lifts the subject zone's median well above the face; the
+    # subject's curve still must not move the face, which the skin matte may
+    # only partly cover.
+    take = make_look(subject_l=60.0, skin_l=40.0)
+    ref = make_look(subject_l=25.0, skin_l=45.0)
+    controls = plan_grade(take, ref, 1.0)
+    face = np.array([[[40.0, 14.0, 16.0]]], np.float32)
+    shirt = np.array([[[85.0, 2.0, -8.0]]], np.float32)
+    assert apply_controls(face, controls, "subject")[0, 0, 0] == pytest.approx(40.0, abs=0.5)
+    assert apply_controls(shirt, controls, "subject")[0, 0, 0] < 80.0
+
+
 def test_a_take_with_no_skin_in_view_gets_no_skin_moves():
     controls = plan_grade(make_look(skin=False), make_look(skin_ab=(25.0, 10.0)), 1.0)
     assert controls.white_balance_ab == (0.0, 0.0)

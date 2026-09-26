@@ -100,7 +100,7 @@ def test_zone_luts_at_zero_strength_are_identities(tmp_path):
             assert np.abs(entry(entries, size, *index) - expected).max() < 1 / 255, zone
 
 
-def test_the_skin_lut_keeps_skin_brightness_where_the_subject_lut_darkens(tmp_path):
+def test_the_skin_lut_keeps_skin_brightness_while_the_subject_lut_darkens_the_rest(tmp_path):
     controls = plan_grade(make_look(subject_l=55.0, skin_l=40.0), make_look(subject_l=20.0, skin_l=45.0), 1.0)
     paths = write_zone_luts(controls, tmp_path, size=17)
     _, skin = read_cube(paths["skin"])
@@ -108,4 +108,5 @@ def test_the_skin_lut_keeps_skin_brightness_where_the_subject_lut_darkens(tmp_pa
     for index in [(10, 7, 5), (12, 9, 8), (6, 4, 3)]:            # skin-like colours
         source = lightness(np.array(index, np.float32) / 16)
         assert lightness(entry(skin, 17, *index)) == pytest.approx(source, abs=1.0)
-        assert lightness(entry(subject, 17, *index)) < source - 5
+    shirt = (14, 14, 15)                                          # a pale shirt, far above the face
+    assert lightness(entry(subject, 17, *shirt)) < lightness(np.array(shirt, np.float32) / 16) - 5
