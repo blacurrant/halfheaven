@@ -64,6 +64,16 @@ def test_a_pair_is_rendered_both_ways_and_measured(tmp_path):
     assert verdict([report])["fallback_pairs"] == []
 
 
+def test_a_matte_left_half_written_by_a_crashed_run_is_not_reused(tmp_path):
+    from halfheaven.analyze.grade_eval import _usable_matte
+
+    whole = write_matte_video(WIDE, Bright(), tmp_path / "whole.mp4", feather=0)
+    stub = tmp_path / "stub.mp4"
+    stub.write_bytes(whole.read_bytes()[:261])      # what an interrupted writer leaves
+    assert _usable_matte(whole, str(WIDE))
+    assert not _usable_matte(stub, str(WIDE))
+
+
 def test_a_reference_without_zones_is_scored_as_a_fallback(tmp_path):
     matte = write_matte_video(WIDE, Bright(), tmp_path / "m.mp4", feather=0)
     fingerprint = fake_fingerprint()

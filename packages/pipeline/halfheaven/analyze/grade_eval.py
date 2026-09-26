@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import subprocess
 import time
 
 import cv2
@@ -241,13 +242,21 @@ def verdict(reports: list[dict]) -> dict:
     }
 
 
+def _usable_matte(path: pathlib.Path, take: str) -> bool:
+    """A matte an earlier run left behind, unless that run died while writing it."""
+    try:
+        return abs(probe(path).duration - probe(take).duration) < 0.5
+    except (FileNotFoundError, ValueError, subprocess.CalledProcessError):
+        return False
+
+
 def _cached_mattes(takes: list[str], out_dir: pathlib.Path) -> dict[str, TakeMatte]:
     found: dict[str, TakeMatte] = {}
     missing: list[str] = []
     for take in takes:
         stem = pathlib.Path(take).stem
         subject, skin = out_dir / f"{stem}.subject.mp4", out_dir / f"{stem}.skin.mp4"
-        if subject.exists() and skin.exists():
+        if _usable_matte(subject, take) and _usable_matte(skin, take):
             found[take] = TakeMatte(subject=str(subject.resolve()), skin=str(skin.resolve()))
         else:
             missing.append(take)
