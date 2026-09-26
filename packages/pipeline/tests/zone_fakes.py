@@ -47,3 +47,36 @@ def make_look(subject_l=50.0, background_l=50.0, skin_l=45.0, skin_ab=(14.0, 16.
         background=make_tone(background_l, chroma=background_chroma, tint=background_tint),
         skin=SkinTone(ab=skin_ab, mean_l=skin_l, median_l=skin_l) if skin else None,
     )
+
+
+from PIL import Image
+
+from halfheaven.render.lut import ColorStats, write_lut
+
+_NEUTRAL = ColorStats(mean=(50.0, 0.0, 0.0), std=(20.0, 10.0, 10.0))
+
+
+class LeftHalf:
+    def mask_for(self, frame):
+        mask = np.zeros(frame.shape[:2], np.uint8)
+        mask[:, : frame.shape[1] // 2] = 255
+        return mask
+
+
+class Nothing:
+    def mask_for(self, frame):
+        return np.zeros(frame.shape[:2], np.uint8)
+
+
+def identity_lut(path):
+    return write_lut(_NEUTRAL, _NEUTRAL, path, size=17)
+
+
+def dark_lut(path):
+    return write_lut(ColorStats(mean=(60.0, 0.0, 0.0), std=(20.0, 10.0, 10.0)),
+                     ColorStats(mean=(25.0, 0.0, 0.0), std=(12.0, 10.0, 10.0)), path, size=17)
+
+
+def gray(image_or_path):
+    image = image_or_path if isinstance(image_or_path, Image.Image) else Image.open(image_or_path)
+    return np.array(image.convert("L")).astype(int)

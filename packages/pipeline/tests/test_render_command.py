@@ -93,3 +93,45 @@ def test_letterbox_is_applied_in_the_finish_pass(tmp_path):
         tmp_path / "b.mp4", tmp_path / "o.mp4", tmp_path,
     )
     assert "pad=" in graph_of(command)
+
+
+from halfheaven.schemas import ZoneGrade
+
+
+def zone_look(tmp_path, **extra):
+    luts = {}
+    for name in ("s", "b", "k"):
+        path = tmp_path / f"{name}.cube"
+        path.write_text("LUT_3D_SIZE 2\n")
+        luts[name] = str(path)
+    grade = ZoneGrade(subject_lut=luts["s"], background_lut=luts["b"], skin_lut=luts["k"])
+    return Look(lut=luts["b"], zone_grade=grade, **extra)
+
+
+def test_the_colourist_grade_runs_three_luts_through_the_mattes(tmp_path):
+    subject, skin = tmp_path / "subject.mp4", tmp_path / "skin.mp4"
+    command = build_finish_command(program(look=zone_look(tmp_path)), tmp_path / "b.mp4",
+                                   tmp_path / "o.mp4", tmp_path, subject_track=subject, skin_track=skin)
+    graph = graph_of(command)
+    assert graph.count("lut3d") == 3
+    assert "erosion" in graph and graph.count("alphamerge") == 2
+    assert command.count(str(subject)) == 1 and command.count(str(skin)) == 1
+
+
+def test_without_mattes_the_colourist_grade_falls_back_to_one_lut(tmp_path):
+    command = build_finish_command(program(look=zone_look(tmp_path)), tmp_path / "b.mp4",
+                                   tmp_path / "o.mp4", tmp_path)
+    assert graph_of(command).count("lut3d") == 1
+
+
+def test_the_subject_matte_is_read_once_for_grade_captions_and_backdrop(tmp_path):
+    subject, skin = tmp_path / "subject.mp4", tmp_path / "skin.mp4"
+    look = zone_look(tmp_path, background_hex="#112233", letterbox_top_pct=0.1, letterbox_bottom_pct=0.1)
+    edit = program(captions=2, look=look)
+    edit = edit.model_copy(update={"captions": [c.model_copy(update={"behind": True}) for c in edit.captions]})
+    command = build_finish_command(edit, tmp_path / "b.mp4", tmp_path / "o.mp4", tmp_path,
+                                   subject_track=subject, skin_track=skin)
+    graph = graph_of(command)
+    assert command.count(str(subject)) == 1
+    assert "split=3[matte0][matte1][matte2]" in graph
+    assert graph.index("lut3d") < graph.index("pad=")      # graded before the letterbox

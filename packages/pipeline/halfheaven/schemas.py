@@ -185,6 +185,23 @@ class GradeControls(BaseModel):
     skin_chroma: float = 1.0
 
 
+class ZoneGrade(BaseModel):
+    """The colourist grade baked as one LUT per zone, joined through the mattes."""
+
+    subject_lut: str
+    background_lut: str
+    skin_lut: str
+    # Skin takes this share of the skin LUT over the subject/background blend.
+    skin_weight: float = Field(default=0.9, ge=0.0, le=1.0)
+    # The grade's copy of the subject matte is pulled this far inside the edge,
+    # then feathered, both as shares of frame height. Pulling in puts any rim
+    # on the hair, where it barely shows, instead of on the wall.
+    choke_pct: float = Field(default=0.005, ge=0.0, le=0.05)
+    feather_pct: float = Field(default=0.005, ge=0.0, le=0.05)
+    # What the LUTs were baked from, for display and later editing.
+    controls: GradeControls | None = None
+
+
 class Look(BaseModel):
     """The reference's appearance, applied to the whole program.
 
@@ -207,6 +224,9 @@ class Look(BaseModel):
     # A solid colour to replace everything but the subject with, "#RRGGBB".
     # Needs a subject matte for every take; without one the picture is kept.
     background_hex: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    # The colourist grade. Needs a subject and a skin matte for every take;
+    # without them the render falls back to `lut`.
+    zone_grade: ZoneGrade | None = None
 
     @property
     def is_letterboxed(self) -> bool:
