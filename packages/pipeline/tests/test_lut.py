@@ -72,3 +72,40 @@ def test_strength_scales_the_effect(tmp_path):
     full_shift = abs(sum(sample(full, size, grey)) / 3 - 0.5)
     half_shift = abs(sum(sample(half, size, grey)) / 3 - 0.5)
     assert half_shift < full_shift
+
+
+import cv2
+import numpy as np
+
+from halfheaven.plan.colourist import plan_grade
+from halfheaven.render.lut import write_zone_luts
+from tests.zone_fakes import make_look
+
+
+def entry(entries, size, r, g, b):
+    return np.array(entries[r + g * size + b * size * size], np.float32)
+
+
+def lightness(rgb):
+    return float(cv2.cvtColor(np.array([[rgb]], np.float32), cv2.COLOR_RGB2LAB)[0, 0, 0])
+
+
+def test_zone_luts_at_zero_strength_are_identities(tmp_path):
+    controls = plan_grade(make_look(background_l=55.0), make_look(background_l=9.0), 0.0)
+    for zone, path in write_zone_luts(controls, tmp_path, size=17).items():
+        size, entries = read_cube(path)
+        assert size == 17 and len(entries) == 17 ** 3
+        for index in [(3, 5, 7), (8, 8, 8), (15, 10, 5)]:
+            expected = np.array(index, np.float32) / (size - 1)
+            assert np.abs(entry(entries, size, *index) - expected).max() < 1 / 255, zone
+
+
+def test_the_skin_lut_keeps_skin_brightness_where_the_subject_lut_darkens(tmp_path):
+    controls = plan_grade(make_look(subject_l=55.0, skin_l=40.0), make_look(subject_l=20.0, skin_l=45.0), 1.0)
+    paths = write_zone_luts(controls, tmp_path, size=17)
+    _, skin = read_cube(paths["skin"])
+    _, subject = read_cube(paths["subject"])
+    for index in [(10, 7, 5), (12, 9, 8), (6, 4, 3)]:            # skin-like colours
+        source = lightness(np.array(index, np.float32) / 16)
+        assert lightness(entry(skin, 17, *index)) == pytest.approx(source, abs=1.0)
+        assert lightness(entry(subject, 17, *index)) < source - 5
