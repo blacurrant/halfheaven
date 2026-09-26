@@ -131,6 +131,34 @@ class TakeMatte(BaseModel):
     skin: str | None = None
 
 
+class ZoneTone(BaseModel):
+    """How one zone of a picture is lit and coloured, in OpenCV float LAB (L 0-100)."""
+
+    # L at percentiles 0..100 of the zone's pixels.
+    l_quantiles: list[float] = Field(min_length=101, max_length=101)
+    mean_l: float
+    median_chroma: float
+    # Mean (a, b) of the zone's near-neutral pixels in each L band of
+    # analyze.zones.BANDS: the split tone. A thin band takes the zone's mean.
+    tints: list[tuple[float, float]] = Field(min_length=6, max_length=6)
+    # Mean a* of near-neutral pixels darker than L 20; None when too few.
+    shadow_tint_a: float | None = None
+
+
+class SkinTone(BaseModel):
+    ab: tuple[float, float]
+    mean_l: float
+    median_l: float
+
+
+class ZoneLook(BaseModel):
+    """A picture read as the subject, the room behind them, and skin."""
+
+    subject: ZoneTone
+    background: ZoneTone
+    skin: SkinTone | None = None
+
+
 class Look(BaseModel):
     """The reference's appearance, applied to the whole program.
 
@@ -295,6 +323,9 @@ class GradeProfile(BaseModel):
     # How hard to push the target toward the reference. Full strength can turn
     # bright footage muddy, so this is a dial rather than a constant.
     strength: float = Field(default=0.7, ge=0.0, le=1.0)
+    # The reference read per zone (subject, background, skin). None when it
+    # shows no person often enough; the colourist grade then does not run.
+    zones: ZoneLook | None = None
 
 
 class FramingProfile(BaseModel):
