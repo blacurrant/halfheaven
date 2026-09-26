@@ -5,6 +5,7 @@ pipeline does around them: gating, the frame grid, carrying a matte through
 crops and punch-ins, and holding the grade back on skin.
 """
 import pathlib
+import shutil
 import subprocess
 
 import numpy as np
@@ -12,7 +13,7 @@ import pytest
 from PIL import Image
 
 from halfheaven.analyze.matte import (
-    BACKGROUND, CLOTHES, FACE_SKIN, matte_take, person_gate,
+    BACKGROUND, CLOTHES, FACE_SKIN, matte_take, matte_takes, person_gate,
 )
 from halfheaven.analyze.segment import write_matte_video
 from halfheaven.media.ffmpeg_bin import ffmpeg
@@ -180,6 +181,33 @@ def test_matte_take_gates_the_edge_by_the_person_and_marks_skin(tmp_path):
     assert subject[:, :140].mean() > 245, "RVM's alpha survives inside the person"
     assert subject[:, 200:].mean() < 5, "and is removed where the parts say background"
     assert skin[:120, :140].mean() > 245 and skin[250:, :140].mean() < 5
+
+
+class ForwardOnlyParts(LeftPersonTopSkin):
+    """Parts stand-in with MediaPipe's video-mode rule: its clock only moves forward."""
+
+    def __init__(self):
+        super().__init__()
+        self.last = -1
+
+    def parts(self, rgb, t_ms):
+        if t_ms <= self.last:
+            raise ValueError("Input timestamp must be monotonically increasing.")
+        self.last = t_ms
+        return super().parts(rgb, t_ms)
+
+    def close(self):
+        pass
+
+
+def test_several_takes_are_matted_in_one_run(tmp_path):
+    # Every take's clock starts at zero again, so one segmenter cannot serve two.
+    second = tmp_path / "second.mp4"
+    shutil.copy(BARS, second)
+    mattes = matte_takes([str(BARS), str(second)], tmp_path / "out",
+                         matter=Opaque(), new_parts=ForwardOnlyParts)
+    assert set(mattes) == {str(BARS), str(second)}
+    assert all(pathlib.Path(m.subject).exists() and pathlib.Path(m.skin).exists() for m in mattes.values())
 
 
 def test_the_gate_grows_past_the_person_but_not_far(tmp_path):

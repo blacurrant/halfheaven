@@ -306,13 +306,24 @@ def matte_take(
     return TakeMatte(subject=str(subject_path.resolve()), skin=str(skin_path.resolve()))
 
 
-def matte_takes(takes: list[str], out_dir: str | pathlib.Path) -> dict[str, TakeMatte]:
-    """Every take, keyed by the path as given - which is what VideoClip.src holds."""
-    matter, parter = RvmMatter(), MediaPipeParts()
-    try:
-        return {take: matte_take(take, out_dir, matter, parter) for take in takes}
-    finally:
-        parter.close()
+def matte_takes(takes: list[str], out_dir: str | pathlib.Path, matter: Matter | None = None,
+                new_parts=None) -> dict[str, TakeMatte]:
+    """Every take, keyed by the path as given - which is what VideoClip.src holds.
+
+    Each take gets its own parts segmenter: MediaPipe's video mode wants a clock
+    that only moves forward, and every take's clock starts at zero again. One
+    segmenter shared across takes failed on the second, and took the mattes of
+    every multi-take upload with it.
+    """
+    matter = matter or RvmMatter()
+    mattes: dict[str, TakeMatte] = {}
+    for take in takes:
+        parter = (new_parts or MediaPipeParts)()
+        try:
+            mattes[take] = matte_take(take, out_dir, matter, parter)
+        finally:
+            parter.close()
+    return mattes
 
 
 # --------------------------------------------------------------------------
