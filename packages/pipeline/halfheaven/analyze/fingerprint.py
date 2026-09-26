@@ -33,7 +33,9 @@ import numpy as np
 
 from halfheaven.analyze.framing import detect_letterbox
 from halfheaven.analyze.shots import Shot, detect_shots, pacing
+from halfheaven.analyze.zones import reference_zone_look, summarise
 from halfheaven.media.probe import probe
+from halfheaven.schemas import ZoneLook
 
 # Motion and colour are measured at this width; text is not. Downscaling
 # averages a glyph's stroke into whatever is behind it, which pushes it out of
@@ -757,11 +759,26 @@ def _text(stats: list[FrameStats], accent_pixels: list[np.ndarray], fps: float) 
 # --------------------------------------------------------------------------
 
 
+ZONE_READINGS = ("face_above_background", "background_l", "skin_chroma", "skin_hue", "shadow_tint")
+
+
+def _not_read() -> Reading:
+    return Reading.absent("not measured")
+
+
 @dataclass
 class Grade:
     lab_mean: Reading
     lab_std: Reading
     sampled_share: Reading
+    # Read per zone (see analyze/zones.py): how far the face stands above the
+    # room, how dark the room is, how rich and which hue the skin is, and the
+    # red/green lean of the room's near-neutral shadows.
+    face_above_background: Reading = field(default_factory=_not_read)
+    background_l: Reading = field(default_factory=_not_read)
+    skin_chroma: Reading = field(default_factory=_not_read)
+    skin_hue: Reading = field(default_factory=_not_read)
+    shadow_tint: Reading = field(default_factory=_not_read)
 
 
 def _grade(path: pathlib.Path, stats: list[FrameStats]) -> Grade:
@@ -807,6 +824,29 @@ def _grade(path: pathlib.Path, stats: list[FrameStats]) -> Grade:
         sampled_share=Reading(round(len(usable) / len(stats), 3),
                               note="share of frames that are photography, not graphics"),
     )
+
+
+def _grade_zones(path: pathlib.Path, stats: list[FrameStats],
+                 parts=None) -> tuple[dict[str, Reading], ZoneLook | None]:
+    """The subject, the room and skin, read on the photographic frames `_grade` reads.
+
+    Absent rather than guessed when the reference shows no person often
+    enough, or when subject separation is not installed here.
+    """
+    usable = [s for s in stats if not s.graphic]
+    look, why = None, "too few photographic frames"
+    if len(usable) >= 10:
+        picks = np.unique(np.linspace(0, len(usable) - 1, min(60, len(usable))).astype(int))
+        try:
+            look = reference_zone_look(path, [usable[p].t for p in picks], parts=parts)
+            why = "no person in enough photographic frames"
+        except (ImportError, OSError, RuntimeError) as error:
+            why = f"subject separation unavailable: {error}"
+    if look is None:
+        return {name: Reading.absent(why) for name in ZONE_READINGS}, None
+    readings = {name: Reading.absent("too few pixels to read") if value is None else Reading(value)
+                for name, value in summarise(look).items()}
+    return readings, look
 
 
 # --------------------------------------------------------------------------
@@ -919,6 +959,9 @@ class Fingerprint:
     text: TextBehaviour
     grade: Grade
     depth: "Depth | None" = None
+    # The reference's zones in full, for the colourist planner. Kept out of
+    # `grade` because the /lab readout lists every grade reading.
+    zone_look: dict | None = None
 
     def as_dict(self) -> dict:
         def unpack(value):
@@ -948,6 +991,7 @@ def extract_fingerprint(path: str | pathlib.Path, with_depth: bool = False,
     info = probe(path)
     stats, accent_pixels, fps = _scan(path, stride=stride)
     shots = detect_shots(path)
+    zone_readings, zone_look = _grade_zones(path, stats)
 
     print_ready = Fingerprint(
         source=path.name,
@@ -957,7 +1001,8 @@ def extract_fingerprint(path: str | pathlib.Path, with_depth: bool = False,
         rhythm=_rhythm(path, shots, info.has_audio),
         structure=_structure(stats, fps),
         text=_text(stats, accent_pixels, fps),
-        grade=_grade(path, stats),
+        grade=dataclasses.replace(_grade(path, stats), **zone_readings),
+        zone_look=zone_look.model_dump() if zone_look else None,
     )
     if with_depth:
         from halfheaven.analyze.depth import measure_depth

@@ -28,7 +28,7 @@ from typing import Any
 import numpy as np
 
 from halfheaven.render.fonts import choose, counterpart
-from halfheaven.schemas import StyleProfile, TypePlan
+from halfheaven.schemas import StyleProfile, TypePlan, ZoneLook
 
 GLYPH_TO_SIZE = 0.684
 WEIGHT_READINGS = (0.085, 0.152, 0.238, 0.314)
@@ -70,10 +70,12 @@ def _apply_grade(profile: StyleProfile, fingerprint: dict[str, Any]) -> StylePro
     mean, spread = _value(grade, "lab_mean"), _value(grade, "lab_std")
     if not mean or not spread:
         return profile
+    zones = fingerprint.get("zone_look")
     return profile.model_copy(update={"grade": profile.grade.model_copy(update={
         "measured": True,
         "lab_mean": tuple(float(v) for v in mean),
         "lab_std": tuple(float(v) for v in spread),
+        "zones": ZoneLook.model_validate(zones) if zones else None,
     })})
 
 
