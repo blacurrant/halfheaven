@@ -9,7 +9,9 @@ came from the spike on 2026-09-26, each from a failure it caused:
 - an unlimited curve turned h264 blocks on a white wall into patches, so the
   slope is clipped the way CLAHE clips its histogram;
 - a reference's lamp is part of the room, not the grade, and stretching a plain
-  wall up to it is what made those patches;
+  wall up to it is what made those patches; for the same reason a daylit
+  reference may not lift a dim room by more than MAX_LIFT (found on the
+  evaluation matrix, where it greyed a room's blacks to L 67);
 - grey-world white balance failed on a cream wall and a blue shirt, so white
   balance is aimed by skin, and capped;
 - a subject-wide curve darkened a face along with a bright shirt, so skin keeps
@@ -31,6 +33,9 @@ WB_MAX_DEG = 12.0
 WB_SHARE = 0.8
 ANCHOR_RANGE = (0.7, 1.5)
 SLOPE_RANGE = (0.12, 1.6)
+# How far a tone curve may brighten any tone, in L. Enough for a faded-black
+# look; the Day 3 reel's daylit sky lifted a dim room's blacks from 0 to 67.
+MAX_LIFT = 12.0
 SATURATION_RANGE = {"subject": (0.85, 1.15), "background": (0.8, 1.3)}
 SKIN_CHROMA_RANGE = (0.85, 1.3)
 GRID = np.linspace(0.0, 100.0, 201)
@@ -64,6 +69,9 @@ def tone_curve(take_q: list[float], ref_q: list[float], anchor: float,
         curve += np.interp(median, GRID, raw) - np.interp(median, GRID, curve)
     else:
         curve += fixed - np.interp(fixed, GRID, curve)
+    # Darkening is what grades do; lifting a dim room toward a daylit
+    # reference only greys its blacks and raises its noise.
+    curve = np.minimum(curve, GRID + MAX_LIFT)
     return [float(v) for v in np.clip(curve, 0.0, 100.0)]
 
 

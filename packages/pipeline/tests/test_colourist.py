@@ -84,6 +84,18 @@ def test_the_subject_curve_leaves_the_face_where_it_was():
     assert apply_controls(shirt, controls, "subject")[0, 0, 0] < 80.0
 
 
+def test_a_daylit_reference_does_not_wash_out_a_dim_room():
+    # The Day 3 reel's background is a bright sky; its level is content, not
+    # grade. Lifting a dim room up to it turned the blacks milky (L 0 -> 67).
+    take = make_look(subject_l=35.0, background_l=21.0, skin_l=40.0)
+    ref = make_look(subject_l=60.0, background_l=68.0, skin_l=20.0)
+    controls = plan_grade(take, ref, 1.0)
+    for zone in ("subject", "background"):
+        for lightness in (0.0, 10.0, 21.0):
+            pixel = np.array([[[lightness, 0.0, 0.0]]], np.float32)
+            assert apply_controls(pixel, controls, zone)[0, 0, 0] <= lightness + 12.0 + 1e-3
+
+
 def test_a_take_with_no_skin_in_view_gets_no_skin_moves():
     controls = plan_grade(make_look(skin=False), make_look(skin_ab=(25.0, 10.0)), 1.0)
     assert controls.white_balance_ab == (0.0, 0.0)
