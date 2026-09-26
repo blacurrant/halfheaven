@@ -21,12 +21,14 @@ import tempfile
 from PIL import Image
 
 from halfheaven.media.ffmpeg_bin import ffmpeg
+from halfheaven.media.probe import probe
 from halfheaven.plan.edits import regroup_captions
 from halfheaven.recut import MATCHED, matched_look
 from halfheaven.render.caption_frames import CaptionFrame, frames_for
 from halfheaven.render.captions import render_frame
 from halfheaven.render.presets import CAPTION_PRESETS, apply_preset
-from halfheaven.schemas import Caption, EditProgram, StyleProfile
+from halfheaven.render.video import grade_filters, mask_track
+from halfheaven.schemas import Caption, EditProgram, Look, StyleProfile
 
 # Wide enough to read a caption on a phone, small enough that eight load at once.
 WIDTH = 270
@@ -80,11 +82,24 @@ def wearing(program: EditProgram, profile: StyleProfile, look: str,
     return regroup_captions(program, styled.captions.max_words)
 
 
-def background(video: pathlib.Path, at: float, lut: str | None, out: pathlib.Path) -> Image.Image:
+def background(video: pathlib.Path, at: float, look: Look, out: pathlib.Path,
+               subject: pathlib.Path | None = None, skin: pathlib.Path | None = None,
+               height: int | None = None) -> Image.Image:
     """The edit's picture at `at`, graded as the finished render grades it."""
-    graded = ["-vf", f"lut3d=file='{lut}':interp=tetrahedral"] if lut and pathlib.Path(lut).exists() else []
-    subprocess.run([ffmpeg(), "-v", "error", "-y", "-ss", f"{max(0.0, at):.3f}", "-i", str(video),
-                    *graded, "-frames:v", "1", str(out)], check=True, capture_output=True)
+    seek = ["-ss", f"{max(0.0, at):.3f}"]
+    if look.zone_grade is not None and subject is not None and skin is not None:
+        frame_height = height or probe(video).height
+        graph = ";".join(grade_filters(look.zone_grade, "[0:v]", "[1:v]", "[2:v]",
+                                       frame_height, "[graded]"))
+        command = [ffmpeg(), "-v", "error", "-y", *seek, "-i", str(video), *seek, "-i", str(subject),
+                   *seek, "-i", str(skin), "-filter_complex", graph, "-map", "[graded]",
+                   "-frames:v", "1", str(out)]
+    else:
+        graded = (["-vf", f"lut3d=file='{look.lut}':interp=tetrahedral"]
+                  if look.lut and pathlib.Path(look.lut).exists() else [])
+        command = [ffmpeg(), "-v", "error", "-y", *seek, "-i", str(video), *graded,
+                   "-frames:v", "1", str(out)]
+    subprocess.run(command, check=True, capture_output=True)
     return Image.open(out).convert("RGBA")
 
 
@@ -115,7 +130,13 @@ def render_previews(program_path: pathlib.Path, work: pathlib.Path, out_dir: pat
     made: list[dict[str, str]] = []
     with tempfile.TemporaryDirectory() as scratch:
         scratch_dir = pathlib.Path(scratch)
-        picture = background(base, at, program.look.lut, scratch_dir / "frame.png")
+        # The render left its mattes on the program timeline in `work`;
+        # mask_track reuses them rather than cutting them again.
+        zoned = program.look.zone_grade is not None
+        subject = mask_track(program, "subject", work) if zoned else None
+        skin = mask_track(program, "skin", work) if zoned else None
+        picture = background(base, at, program.look, scratch_dir / "frame.png",
+                             subject, skin, canvas.height)
         picture = picture.resize((canvas.width, canvas.height))
         for key, label, blurb in looks:
             dressed = wearing(program, profile, key, program_path)

@@ -56,3 +56,19 @@ def test_a_missing_matte_falls_back_to_the_single_lut(tmp_path):
     plain = halves(EditProgram(**BASE), tmp_path, "plain")
     fallback = halves(EditProgram(**BASE, look=look), tmp_path, "fallback")
     assert fallback[0] < plain[0] - 10 and fallback[1] < plain[1] - 10
+
+
+from halfheaven.previews import background
+
+
+def test_a_preview_is_graded_the_way_the_render_is(tmp_path):
+    grade = ZoneGrade(subject_lut=str(identity_lut(tmp_path / "i.cube")),
+                      background_lut=str(dark_lut(tmp_path / "d.cube")),
+                      skin_lut=str(identity_lut(tmp_path / "k.cube")))
+    left = write_matte_video(BARS, LeftHalf(), tmp_path / "left.mp4", feather=0)
+    nothing = write_matte_video(BARS, Nothing(), tmp_path / "none.mp4", feather=0)
+    plain = gray(background(BARS, 1.0, Look(), tmp_path / "plain.png"))
+    graded = gray(background(BARS, 1.0, Look(zone_grade=grade), tmp_path / "graded.png",
+                             subject=left, skin=nothing, height=568))
+    assert graded[:, 20:140].mean() == pytest.approx(plain[:, 20:140].mean(), abs=4)
+    assert graded[:, 180:300].mean() < plain[:, 180:300].mean() - 10
