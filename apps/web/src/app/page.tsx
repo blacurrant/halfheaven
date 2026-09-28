@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
+import Image from "next/image";
+import { Caveat, Inter, Playfair_Display, Tiro_Devanagari_Hindi } from "next/font/google";
 
-import ThemeToggle from "@/components/ThemeToggle";
+import HeroShowcase from "@/components/HeroShowcase";
+import StepArt, { SourceChips } from "@/components/StepArt";
 import Waitlist from "@/components/Waitlist";
 
 import s from "./landing.module.css";
@@ -13,6 +16,9 @@ import s from "./landing.module.css";
  * with them. Nothing here is invented - no user counts, no testimonials, no
  * real creator's reel in the hero - and the India features that are not built
  * yet say "coming at launch" rather than pretending.
+ *
+ * The look follows apps/web/DESIGN.md. It is light-only: the page never reads
+ * the site theme, so there is no toggle here.
  */
 
 export const metadata: Metadata = {
@@ -22,47 +28,56 @@ export const metadata: Metadata = {
     "pace - and keeps that look for every video after, for a fraction of what an editor costs.",
 };
 
+// Loaded here rather than in the root layout so /studio doesn't download them.
+// Playfair stands in for Perfectly Nineties, which isn't licensed yet.
+const serif = Playfair_Display({ variable: "--font-serif", subsets: ["latin"], style: ["normal", "italic"] });
+const sans = Inter({ variable: "--font-sans", subsets: ["latin"] });
+const deva = Tiro_Devanagari_Hindi({ variable: "--font-deva", subsets: ["devanagari"], weight: "400" });
+// the handwritten notes in the hero and beside "How it works"
+const hand = Caveat({ variable: "--font-hand", subsets: ["latin"], weight: "500" });
+
 // ---- icons ------------------------------------------------------------------
 
-const Svg = ({ children, size = 20 }: { children: React.ReactNode; size?: number }) => (
-  <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.9"
+const Svg = ({ children, size = 20, stroke = 1.9 }: { children: React.ReactNode; size?: number; stroke?: number }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={stroke}
        strokeLinecap="round" strokeLinejoin="round" aria-hidden>{children}</svg>
 );
-const Check = ({ size = 14 }: { size?: number }) => <Svg size={size}><path d="M5 12.5l4.5 4.5L19 7" /></Svg>;
-const Rupee = () => <Svg><path d="M7 5h10M7 9.5h10M8 5c5.5 0 5.5 9 0 9h-1l7 6" /></Svg>;
-const Clock = () => <Svg><circle cx="12" cy="12" r="8.5" /><path d="M12 7.5V12l3 2" /></Svg>;
-const Loop = () => <Svg><path d="M4 12a8 8 0 0 1 13.7-5.6L20 8.5M20 12a8 8 0 0 1-13.7 5.6L4 15.5" /><path d="M20 4v4.5h-4.5M4 20v-4.5h4.5" /></Svg>;
-const Layers = () => <Svg><path d="M12 3.5l8.5 4.5L12 12.5 3.5 8 12 3.5z" /><path d="M3.5 12.5L12 17l8.5-4.5M3.5 16.5L12 21l8.5-4.5" /></Svg>;
-const Arrow = () => <Svg><path d="M5 12h14M13 6l6 6-6 6" /></Svg>;
+const Check = ({ size = 16 }: { size?: number }) => <Svg size={size} stroke={2.2}><path d="M5 12.5l4.5 4.5L19 7" /></Svg>;
+const Arrow = ({ size = 18 }: { size?: number }) => <Svg size={size}><path d="M5 12h14M13 6l6 6-6 6" /></Svg>;
+
+const Brand = () => (
+  <span className={s.brand}><span className={s.mark}><Arrow size={13} /></span>Halfheaven</span>
+);
 
 // ---- the words --------------------------------------------------------------
 
 const PAINS = [
   {
-    icon: <Rupee />, stat: "₹10–30k a month", title: "The editor bill",
+    stat: "₹10–30k a month", title: "The editor bill",
     body: "A good short-form editor charges ₹500–3,000 a reel. Post five times a week and editing can quietly take a third of what you earn.",
   },
   {
-    icon: <Clock />, stat: "2–4 hours a reel", title: "The do-it-yourself tax",
+    stat: "2–4 hours a reel", title: "The do-it-yourself tax",
     body: "Edit it yourself and a 30-second reel takes an evening. That’s time you’re not shooting, writing or talking to brands.",
   },
   {
-    icon: <Loop />, stat: "Back to square one", title: "The editor churn",
+    stat: "Back to square one", title: "The editor churn",
     body: "Your look lives in your editor’s head. When they get busy, raise their rates or leave, it goes with them, and the next one takes weeks to get it right.",
   },
 ];
 
+// each title is plain words then the step's point, set in italic
 const STEPS = [
   {
-    title: "Pick your reference",
+    title: "Pick your", mark: "reference",
     body: "One video your editor made, or any reel whose style you love. Halfheaven reads it: the cut rhythm, the caption type and placement, the colour, the pace.",
   },
   {
-    title: "Drop your raw footage",
+    title: "Drop your", mark: "raw footage",
     body: "Talk to camera, keep every take, upload. No timeline, no templates, no keyframes.",
   },
   {
-    title: "Get it back in your style",
+    title: "Get it back", mark: "in your style",
     body: "Cut, captioned and graded to match. Want something different? Say it in plain words (“bigger captions”, “cut it tighter”) and it redoes the edit.",
   },
 ];
@@ -82,7 +97,7 @@ const INDIA = [
     body: "Code-mixed speech (“bhai, yeh game-changer hai”) captioned the way you said it, not mangled into one language.",
   },
   {
-    glyph: "अ", title: "Hindi and regional type",
+    glyph: "अ", deva: true, title: "Hindi and regional type",
     body: "Devanagari and other Indian scripts, set in typefaces drawn for them rather than a fallback font.",
   },
   {
@@ -150,70 +165,28 @@ const FAQS = [
   },
 ];
 
-// ---- the hero's phones ------------------------------------------------------
-
-function Phone({ tone, line, word }: { tone: string; line: string; word: string }) {
-  return (
-    <div className={s.phone}>
-      <div className={`${s.screen} ${tone}`}>
-        <div className={s.bars}><i className={s.on} /><i className={s.on} /><i /><i /></div>
-        <div className={s.subject} />
-        <p className={s.cap}>{line}<b>{word}</b></p>
-      </div>
-    </div>
-  );
-}
-
-/* One reference on the left, then a fanned stack of later videos carrying the
-   same caption treatment over different footage - the product in one picture. */
-function Stage() {
-  return (
-    <div className={s.stage} aria-hidden>
-      <div className={s.col}>
-        <span className={s.phoneLabel}>A reel you love</span>
-        <Phone tone={s.toneA} line="building a brand from" word="zero" />
-      </div>
-      <div className={s.bridge}><span><Arrow /></span><em>Same look</em></div>
-      <div className={s.col}>
-        <span className={s.phoneLabel}>Every video after</span>
-        <div className={s.fan}>
-          <Phone tone={s.toneC} line="day 12 of posting" word="daily" />
-          <Phone tone={s.toneB} line="what nobody tells you about" word="pricing" />
-          <Phone tone={s.toneA} line="how I got my first" word="client" />
-        </div>
-        <span className={s.badge}><Check /> Same style, every video</span>
-      </div>
-    </div>
-  );
-}
-
 // ---- the page ---------------------------------------------------------------
 
 export default function Landing() {
   return (
-    <div className={s.page}>
+    <div className={`${s.page} ${serif.variable} ${sans.variable} ${deva.variable} ${hand.variable}`}>
       <header className={s.nav}>
-        <div className={`${s.wrap} ${s.navInner}`}>
-          <a href="#top" className={`logo ${s.logoLink}`}>
-            <span className="dot">H</span><span className="name">Halfheaven</span>
-          </a>
-          <nav className={s.navLinks} aria-label="Sections">
-            <a href="#problem">The problem</a>
-            <a href="#how">How it works</a>
-            <a href="#pricing">Pricing</a>
-            <a href="#faq">FAQ</a>
-          </nav>
-          <div className={s.navRight}>
-            <ThemeToggle />
-            <a href="#waitlist" className="btn primary sm">Join waitlist</a>
-          </div>
-        </div>
+        <a href="#top" className={s.logoLink}><Brand /></a>
+        <nav className={s.navLinks} aria-label="Sections">
+          <a href="#problem">The problem</a>
+          <a href="#how">How it works</a>
+          <a href="#pricing">Pricing</a>
+          <a href="#faq">FAQ</a>
+        </nav>
+        <a href="#waitlist" className={`${s.btn} ${s.primary} ${s.sm}`}>Join waitlist</a>
       </header>
 
       <main id="top">
-        <section className={`${s.wrap} ${s.hero}`}>
-          <div>
-            <span className={s.pill}><i>Early access</i> Made for Indian creators</span>
+        <section className={s.hero}>
+          <Image src="/landing/backdrop.jpg" alt="" fill priority sizes="100vw" className={s.heroPhoto} />
+          <span className={s.heroShade} />
+          <div className={s.heroCopy}>
+            <span className={s.pill}>Early access · Made for Indian creators</span>
             <h1 className={s.h1}>
               <span className={s.h1Ask}>See a reel you love?</span>
               Your videos can look like <em>that</em>.
@@ -224,226 +197,203 @@ export default function Landing() {
               too, for a fraction of what an editor costs.
             </p>
             <div className={s.ctas}>
-              <a href="#waitlist" className="btn primary">Join the waitlist</a>
-              <a href="#how" className="btn">See how it works</a>
+              <a href="#waitlist" className={`${s.btn} ${s.primary}`}>Join the waitlist</a>
+              <a href="#how" className={`${s.btn} ${s.ghostDusk}`}>See how it works</a>
             </div>
             <p className={s.fine}>Early-access prices locked in for waitlist members. No card needed.</p>
           </div>
-          <Stage />
+          <HeroShowcase />
         </section>
 
-        <section id="problem" className={`${s.section} ${s.alt}`}>
-          <div className={s.wrap}>
-            <div className={s.head}>
-              <span className={s.kicker}>The problem</span>
-              <h2 className={s.h2}>Editing is eating your <em>channel</em>.</h2>
-              <p className={s.sub}>
-                Every creator hits the same wall. You pay for editing in rupees or you pay for it in hours. Either
-                way it caps how often you can post, and posting often is the whole game.
-              </p>
-            </div>
-            <div className={s.grid3}>
-              {PAINS.map((p) => (
-                <article key={p.title} className={s.card}>
-                  <span className={s.icon}>{p.icon}</span>
-                  <p className={s.stat}>{p.stat}</p>
+        <section id="problem" className={s.section}>
+          <div className={s.head}>
+            <span className={s.kicker}>The problem</span>
+            <h2 className={s.h2}>Editing is eating your <em>channel</em>.</h2>
+            <p className={s.sub}>
+              Every creator hits the same wall. You pay for editing in rupees or you pay for it in hours. Either
+              way it caps how often you can post, and posting often is the whole game.
+            </p>
+          </div>
+          <div className={s.pains}>
+            {PAINS.map((p) => (
+              <article key={p.title} className={s.pain}>
+                <p className={s.stat}>{p.stat}</p>
+                <div>
                   <h3>{p.title}</h3>
                   <p>{p.body}</p>
-                </article>
-              ))}
-            </div>
-            <p className={s.foot}>Rates are typical freelance ranges for short-form editing in India.</p>
+                </div>
+              </article>
+            ))}
           </div>
+          <p className={s.foot}>Rates are typical freelance ranges for short-form editing in India.</p>
         </section>
 
         <section className={s.band}>
-          <div className={s.wrap}>
-            <p className={s.bandLine}>The hard part isn’t the first great edit. It’s the <em>fiftieth</em>.</p>
-            <p className={s.bandSub}>Halfheaven makes the fiftieth look exactly like the first.</p>
-          </div>
+          <p className={s.bandLine}>The hard part isn’t the first great edit. <span>It’s the <em>fiftieth</em>.</span></p>
+          <p className={s.bandSub}>Halfheaven makes the fiftieth look exactly like the first.</p>
         </section>
 
-        <section id="how" className={s.section}>
-          <div className={s.wrap}>
-            <div className={s.head}>
-              <span className={s.kicker}>How it works</span>
-              <h2 className={s.h2}>Edit once. Then just <em>post</em>.</h2>
-              <p className={s.sub}>
-                Halfheaven turns one video you love into a style it can repeat on every video you shoot after it.
-              </p>
-            </div>
-            <ol className={s.steps} style={{ listStyle: "none", margin: 0, padding: 0 }}>
-              {STEPS.map((step, i) => (
-                <li key={step.title} className={s.step}>
+        <section id="how" className={`${s.section} ${s.wide} ${s.airy}`}>
+          <div className={`${s.head} ${s.center}`}>
+            <span className={s.kicker}>How it works</span>
+            <h2 className={s.h2}>Edit once. Then just <em>post</em>.</h2>
+            <p className={s.sub}>
+              Halfheaven turns one video you love into a style it can repeat on every video you shoot after it.
+            </p>
+          </div>
+          <ol className={s.steps}>
+            {STEPS.map((step, i) => (
+              <li key={step.mark} className={s.step}>
+                <div className={s.stepText}>
                   <span className={s.num}>0{i + 1}</span>
-                  <h3>{step.title}</h3>
+                  <h3>{step.title} <em>{step.mark}</em></h3>
                   <p>{step.body}</p>
-                </li>
-              ))}
-            </ol>
-            <div className={s.memory}>
-              <span className={s.icon}><Layers /></span>
-              <div>
-                <strong>Your style is saved, not rebuilt.</strong>
-                <p>
-                  Every style you make stays in your account. New videos start from it, so your channel looks
-                  like your channel every time, whoever is or isn’t editing it this month.
-                </p>
-              </div>
-            </div>
-          </div>
+                  {i === 1 && <SourceChips />}
+                </div>
+                <StepArt step={i} />
+              </li>
+            ))}
+          </ol>
         </section>
 
-        <section id="compare" className={`${s.section} ${s.alt}`}>
-          <div className={s.wrap}>
-            <div className={s.head}>
-              <span className={s.kicker}>The choice</span>
-              <h2 className={s.h2}>What you’re really <em>choosing</em> between.</h2>
-              <p className={s.sub}>Every creator already pays for editing, one way or another.</p>
-            </div>
-            <div className={s.tableWrap}>
-              <table className={s.table}>
-                <thead>
-                  <tr>
-                    <th scope="col"><span className="sr-only">Compared on</span></th>
-                    <th scope="col">A freelance editor</th>
-                    <th scope="col">Doing it yourself</th>
-                    <th scope="col" className={s.ours}>Halfheaven</th>
+        <section id="compare" className={`${s.section} ${s.wide}`}>
+          <div className={s.head}>
+            <span className={s.kicker}>The choice</span>
+            <h2 className={s.h2}>What you’re really <em>choosing</em> between.</h2>
+            <p className={s.sub}>Every creator already pays for editing, one way or another.</p>
+          </div>
+          <div className={s.tableWrap}>
+            <table className={s.table}>
+              <thead>
+                <tr>
+                  <th scope="col"><span className="sr-only">Compared on</span></th>
+                  <th scope="col">A freelance editor</th>
+                  <th scope="col">Doing it yourself</th>
+                  <th scope="col" className={s.ours}>Halfheaven</th>
+                </tr>
+              </thead>
+              <tbody>
+                {COMPARE.map(([row, editor, self, ours]) => (
+                  <tr key={row}>
+                    <th scope="row">{row}</th>
+                    <td data-label="Freelance editor">{editor}</td>
+                    <td data-label="Doing it yourself">{self}</td>
+                    <td data-label="Halfheaven" className={s.ours}>{ours}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {COMPARE.map(([row, editor, self, ours]) => (
-                    <tr key={row}>
-                      <th scope="row">{row}</th>
-                      <td data-label="Freelance editor">{editor}</td>
-                      <td data-label="Doing it yourself">{self}</td>
-                      <td data-label="Halfheaven" className={s.ours}>{ours}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           </div>
         </section>
 
         <section id="india" className={s.section}>
-          <div className={s.wrap}>
-            <div className={s.head}>
-              <span className={s.kicker}>Built for India <span className={s.soon}>Coming at launch</span></span>
-              <h2 className={s.h2}>Made for how India <em>actually</em> posts.</h2>
-              <p className={s.sub}>
-                Most editing tools are built for English-only creators paying in dollars. We’re not.
-              </p>
-            </div>
-            <div className={s.grid4}>
-              {INDIA.map((f) => (
-                <article key={f.title} className={s.feature}>
-                  <p className={s.glyph} aria-hidden>{f.glyph}</p>
+          <div className={s.head}>
+            <span className={s.kicker}>Built for India <span className={s.soon}>Coming at launch</span></span>
+            <h2 className={s.h2}>Made for how India <em>actually</em> posts.</h2>
+            <p className={s.sub}>
+              Most editing tools are built for English-only creators paying in dollars. We’re not.
+            </p>
+          </div>
+          <div className={s.features}>
+            {INDIA.map((f) => (
+              <article key={f.title} className={s.feature}>
+                <p className={`${s.glyph} ${f.deva ? s.deva : ""}`} aria-hidden>{f.glyph}</p>
+                <div>
                   <h3>{f.title}</h3>
                   <p>{f.body}</p>
-                </article>
-              ))}
-            </div>
+                </div>
+              </article>
+            ))}
           </div>
         </section>
 
-        <section id="editors" className={`${s.section} ${s.alt}`}>
-          <div className={`${s.wrap} ${s.split}`}>
-            <div className={s.head}>
-              <span className={s.kicker}>For editors and agencies</span>
-              <h2 className={s.h2}>Make the master edit. Let the rest <em>follow</em>.</h2>
-              <p className={s.sub}>
-                Halfheaven doesn’t replace good editors. It multiplies them. Craft a creator’s look once, then take on
-                more clients without taking on more hours.
-              </p>
-              <div className={s.ctas}>
-                <a href="#waitlist" className="btn">Join as an editor</a>
-              </div>
-            </div>
-            <ul className={s.list}>
-              {EDITORS.map((e) => (
-                <li key={e.title}>
-                  <span className={s.tick}><Check /></span>
-                  <div><strong>{e.title}</strong><span>{e.body}</span></div>
-                </li>
-              ))}
-            </ul>
+        <section id="editors" className={`${s.section} ${s.tight}`}>
+          <div className={s.head}>
+            <span className={s.kicker}>For editors and agencies</span>
+            <h2 className={s.h2}>Make the master edit. Let the rest <em>follow</em>.</h2>
+            <p className={s.sub}>
+              Halfheaven doesn’t replace good editors. It multiplies them. Craft a creator’s look once, then take on
+              more clients without taking on more hours.
+            </p>
           </div>
+          <ul className={s.list}>
+            {EDITORS.map((e) => (
+              <li key={e.title}>
+                <Check />
+                <div><strong>{e.title}</strong><span>{e.body}</span></div>
+              </li>
+            ))}
+          </ul>
+          <a href="#waitlist" className={`${s.btn} ${s.ghost}`}>Join as an editor</a>
         </section>
 
-        <section id="pricing" className={s.section}>
-          <div className={s.wrap}>
-            <div className={s.head}>
-              <span className={s.kicker}>Pricing</span>
-              <h2 className={s.h2}>A month of editing for the price of a <em>reel</em>.</h2>
-              <p className={s.sub}>Early-access prices. Waitlist members lock these in.</p>
-            </div>
-            <div className={s.tiers}>
-              {TIERS.map((t) => (
-                <article key={t.name} className={`${s.tier} ${t.ribbon ? s.featured : ""}`}>
-                  {t.ribbon && <span className={s.ribbon}>{t.ribbon}</span>}
-                  <h3>{t.name}</h3>
+        <section id="pricing" className={`${s.section} ${s.wide} ${s.airy}`}>
+          <div className={`${s.head} ${s.center}`}>
+            <span className={s.kicker}>Pricing</span>
+            <h2 className={s.h2}>A month of editing for the price of a <em>reel</em>.</h2>
+            <p className={s.sub}>Early-access prices. Waitlist members lock these in.</p>
+          </div>
+          <div className={s.tiers}>
+            {TIERS.map((t) => (
+              <article key={t.name} className={`${s.tier} ${t.ribbon ? s.featured : ""}`}>
+                <div className={s.tierHead}>
+                  <h3>{t.name}{t.ribbon && <span className={s.ribbon}>{t.ribbon}</span>}</h3>
                   <p className={s.for}>{t.for}</p>
-                  <p className={s.price}><strong>{t.price}</strong><span>{t.per}</span></p>
-                  <ul className={s.feats}>
-                    {t.feats.map((f) => <li key={f}><Check /> {f}</li>)}
-                  </ul>
-                  <a href="#waitlist" className={`btn ${t.ribbon ? "primary" : ""} ${s.full}`}>Join the waitlist</a>
-                </article>
-              ))}
-            </div>
-            <p className={s.tiersNote}>Prices in rupees, billed monthly by UPI Autopay or card. GST extra.</p>
-          </div>
-        </section>
-
-        <section id="faq" className={`${s.section} ${s.alt}`}>
-          <div className={`${s.wrap} ${s.faqGrid}`}>
-            <div className={s.head}>
-              <span className={s.kicker}>Questions</span>
-              <h2 className={s.h2}>Before you <em>ask</em>.</h2>
-              <p className={s.sub}>The things creators want to know first.</p>
-            </div>
-            <div className={s.faq}>
-              {FAQS.map((f) => (
-                <details key={f.q}>
-                  <summary>{f.q}</summary>
-                  <p>{f.a}</p>
-                </details>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section id="waitlist" className={`${s.section} ${s.cta}`}>
-          <div className={s.wrap}>
-            <div className={s.ctaCard}>
-              <div>
-                <h2 className={s.h2}>Get your <em>evenings</em> back.</h2>
-                <p className={s.sub}>
-                  Join the waitlist and we’ll let you in batch by batch, with early-access pricing locked in.
-                </p>
-                <ul className={s.perks}>
-                  <li><Check size={16} /> Early-access price, locked in</li>
-                  <li><Check size={16} /> Bring one video you love; we do the rest</li>
-                  <li><Check size={16} /> No card needed to join</li>
+                </div>
+                <p className={s.price}><strong>{t.price}</strong><span>{t.per}</span></p>
+                <ul className={s.feats}>
+                  {t.feats.map((f) => <li key={f}><Check /> {f}</li>)}
                 </ul>
-              </div>
-              <Waitlist />
+                <a href="#waitlist" className={`${s.btn} ${s.primary} ${s.full}`}>Join the waitlist</a>
+              </article>
+            ))}
+          </div>
+          <p className={s.tiersNote}>Prices in rupees, billed monthly by UPI Autopay or card. GST extra.</p>
+        </section>
+
+        <section id="faq" className={s.section}>
+          <div className={s.head}>
+            <span className={s.kicker}>Questions</span>
+            <h2 className={s.h2}>Before you <em>ask</em>.</h2>
+            <p className={s.sub}>The things creators want to know first.</p>
+          </div>
+          <div className={s.faq}>
+            {FAQS.map((f, i) => (
+              <details key={f.q} open={i === 0}>
+                <summary>{f.q}</summary>
+                <p>{f.a}</p>
+              </details>
+            ))}
+          </div>
+        </section>
+
+        <section id="waitlist" className={`${s.section} ${s.wide} ${s.cta}`}>
+          <div className={s.ctaCard}>
+            <div className={s.ctaCopy}>
+              <span className={s.kicker}>Early access</span>
+              <h2 className={s.display}>Get your <em>evenings</em> back.</h2>
+              <p className={s.sub}>
+                Join the waitlist and we’ll let you in batch by batch, with early-access pricing locked in.
+              </p>
+              <ul className={s.perks}>
+                {["Early-access price, locked in", "Bring one video you love; we do the rest", "No card needed to join"].map((p) => (
+                  <li key={p}><span className={s.perkTick}><Check size={14} /></span>{p}</li>
+                ))}
+              </ul>
             </div>
+            <Waitlist />
           </div>
         </section>
       </main>
 
       <footer className={s.footer}>
-        <div className={`${s.wrap} ${s.footInner}`}>
-          <span className="logo"><span className="dot">H</span><span className="name">Halfheaven</span></span>
-          <p>© 2026 Halfheaven. Your editor’s style, on every video.</p>
-          <nav className={s.footLinks} aria-label="Footer">
-            <a href="#how">How it works</a>
-            <a href="#pricing">Pricing</a>
-            <a href="#faq">FAQ</a>
-          </nav>
-        </div>
+        <Brand />
+        <p>© 2026 Halfheaven. Your editor’s style, on every video.</p>
+        <nav className={s.footLinks} aria-label="Footer">
+          <a href="#how">How it works</a>
+          <a href="#pricing">Pricing</a>
+          <a href="#faq">FAQ</a>
+        </nav>
       </footer>
     </div>
   );
