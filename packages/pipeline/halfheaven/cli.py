@@ -28,11 +28,9 @@ from halfheaven.plan.editor import decide
 from halfheaven.plan.reel import Reel
 from halfheaven.plan.overrides import apply_overrides
 from halfheaven.plan.subject_captions import place_around_subject
-from halfheaven.analyze.framing import detect_letterbox
-from halfheaven.analyze.grade import measure_color_stats
-from halfheaven.render.lut import ColorStats, write_lut
+from halfheaven.plan.grade import describe_controls, global_lut_for, zone_grade_for
 from halfheaven.render.video import mask_track, render
-from halfheaven.schemas import Canvas, Look
+from halfheaven.schemas import Canvas, Look, StyleProfile
 
 
 def write_heard(work: pathlib.Path, transcript: Transcript) -> pathlib.Path:
@@ -57,6 +55,15 @@ def write_decided(work: pathlib.Path, decisions) -> pathlib.Path:
         "punch": list(decisions.punch_word_indices),
     }))
     return path
+
+
+def profile_json(profile: StyleProfile) -> str:
+    """The profile as style_profile.json holds it, which is what the studio's
+    chat sends with every message. The reference's zone table stays out: it is
+    thousands of characters the chat cannot use, and a reply that nulled it
+    would silently turn the colourist grade off. Every run reads it afresh
+    from the fingerprint."""
+    return profile.model_dump_json(indent=2, exclude={"grade": {"zones"}})
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -117,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
         patch = json.loads(args.overrides)
         profile = apply_overrides(profile, patch)
         print(f"      adjusted: {', '.join(sorted(patch))}")
-    (work / "style_profile.json").write_text(profile.model_dump_json(indent=2))
+    (work / "style_profile.json").write_text(profile_json(profile))
 
     takes = list(args.target)
     label = takes[0] if len(takes) == 1 else f"{len(takes)} takes"
@@ -216,22 +223,13 @@ def main(argv: list[str] | None = None) -> int:
         letterbox_top_pct=profile.framing.letterbox_top_pct,
         letterbox_bottom_pct=profile.framing.letterbox_bottom_pct,
     )
-    if profile.grade.measured:
-        # Source stats are the target's own look; target stats are the
-        # reference's. Strength is a dial because pushing bright footage all the
-        # way to a dark reference turns it muddy.
-        # Measured from the first take: several takes of the same setup share a
-        # look, and sampling every one of them buys nothing.
-        primary = takes[0]
-        target_stats = measure_color_stats(primary, framing=detect_letterbox(primary))
-        lut = write_lut(
-            source=target_stats,
-            target=ColorStats(mean=profile.grade.lab_mean, std=profile.grade.lab_std),
-            out_path=work / "grade.cube",
-            strength=profile.grade.strength,
-        )
+    # The single LUT is always baked when the reference was measured: it is
+    # the grade whenever the colourist one cannot be made or loses a matte.
+    baked = global_lut_for(profile, takes, work)
+    if baked is not None:
+        lut, take_stats = baked
         look = look.model_copy(update={"lut": str(lut)})
-        print(f"      grade: target LAB mean={tuple(round(v, 1) for v in target_stats.mean)} "
+        print(f"      grade: target LAB mean={tuple(round(v, 1) for v in take_stats.mean)} "
               f"-> reference, strength {profile.grade.strength}")
     mattes = matting.result()
     if mattes:
@@ -242,6 +240,12 @@ def main(argv: list[str] | None = None) -> int:
             "skin_protect": profile.subject.skin_protect if look.lut else 0.0,
             "background_hex": profile.subject.background_hex,
         })
+        zone_grade = zone_grade_for(profile, takes, mattes, work)
+        if zone_grade is not None:
+            look = look.model_copy(update={"zone_grade": zone_grade})
+            print(f"      colourist grade: {describe_controls(zone_grade.controls)}")
+        elif profile.grade.zones is None:
+            print("      colourist grade: no person read in the reference, keeping the single grade")
     else:
         print(f"      no subject separation: {matting.reason}")
     program = program.model_copy(

@@ -131,6 +131,79 @@ class TakeMatte(BaseModel):
     skin: str | None = None
 
 
+class ZoneTone(BaseModel):
+    """How one zone of a picture is lit and coloured, in OpenCV float LAB (L 0-100)."""
+
+    # L at percentiles 0..100 of the zone's pixels.
+    l_quantiles: list[float] = Field(min_length=101, max_length=101)
+    mean_l: float
+    median_chroma: float
+    # Mean (a, b) of the zone's near-neutral pixels in each L band of
+    # analyze.zones.BANDS: the split tone. A thin band takes the zone's mean.
+    tints: list[tuple[float, float]] = Field(min_length=6, max_length=6)
+    # Mean a* of near-neutral pixels darker than L 20; None when too few.
+    shadow_tint_a: float | None = None
+
+
+class SkinTone(BaseModel):
+    ab: tuple[float, float]
+    mean_l: float
+    median_l: float
+
+
+class ZoneLook(BaseModel):
+    """A picture read as the subject, the room behind them, and skin."""
+
+    subject: ZoneTone
+    background: ZoneTone
+    skin: SkinTone | None = None
+
+
+class ZoneControls(BaseModel):
+    """One zone's grade: a tone curve on L, a saturation scale and a tint shift."""
+
+    # Output L at each point of plan.colourist.GRID (L 0..100 in 201 steps).
+    curve: list[float] = Field(min_length=201, max_length=201)
+    saturation: float
+    # Near-neutral tint per L band of analyze.zones.BANDS: the take's and the reference's.
+    tint_take: list[tuple[float, float]] = Field(min_length=6, max_length=6)
+    tint_ref: list[tuple[float, float]] = Field(min_length=6, max_length=6)
+
+
+class GradeControls(BaseModel):
+    """A colourist's controls, read from a reference, every one scaled by `strength`."""
+
+    strength: float = Field(ge=0.0, le=1.0)
+    # One (a, b) offset for every pixel, aimed by the skin; and the hue turn it makes.
+    white_balance_ab: tuple[float, float] = (0.0, 0.0)
+    white_balance_deg: float = 0.0
+    # The reference's tonal layout is scaled by this so its skin sits where
+    # this creator's skin already is.
+    exposure_anchor: float = 1.0
+    subject: ZoneControls
+    background: ZoneControls
+    skin_chroma: float = 1.0
+
+
+class ZoneGrade(BaseModel):
+    """The colourist grade baked as one LUT per zone, joined through the mattes."""
+
+    subject_lut: str
+    background_lut: str
+    skin_lut: str
+    # Skin takes this share of the skin LUT over the subject/background blend.
+    skin_weight: float = Field(default=0.9, ge=0.0, le=1.0)
+    # The grade's copy of the subject matte is pulled this far inside the edge,
+    # then feathered, both as shares of frame height. Tuned on the evaluation
+    # matrix (3 takes x 4 references): pulling in by 0.5% put a rim of up to
+    # 9 L on the hair wherever the two zones' grades differ, and 0.2% still
+    # left 6 of 12 pairs over the 2 L bar; centred on the edge, 11 of 12 held.
+    choke_pct: float = Field(default=0.0, ge=0.0, le=0.05)
+    feather_pct: float = Field(default=0.004, ge=0.0, le=0.05)
+    # What the LUTs were baked from, for display and later editing.
+    controls: GradeControls | None = None
+
+
 class Look(BaseModel):
     """The reference's appearance, applied to the whole program.
 
@@ -153,6 +226,9 @@ class Look(BaseModel):
     # A solid colour to replace everything but the subject with, "#RRGGBB".
     # Needs a subject matte for every take; without one the picture is kept.
     background_hex: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    # The colourist grade. Needs a subject and a skin matte for every take;
+    # without them the render falls back to `lut`.
+    zone_grade: ZoneGrade | None = None
 
     @property
     def is_letterboxed(self) -> bool:
@@ -295,6 +371,9 @@ class GradeProfile(BaseModel):
     # How hard to push the target toward the reference. Full strength can turn
     # bright footage muddy, so this is a dial rather than a constant.
     strength: float = Field(default=0.7, ge=0.0, le=1.0)
+    # The reference read per zone (subject, background, skin). None when it
+    # shows no person often enough; the colourist grade then does not run.
+    zones: ZoneLook | None = None
 
 
 class FramingProfile(BaseModel):

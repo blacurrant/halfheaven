@@ -94,6 +94,12 @@ def _lab_distance(a: Any, b: Any) -> float:
     return sum((float(x) - float(y)) ** 2 for x, y in zip(a, b)) ** 0.5
 
 
+def _angle(a: Any, b: Any) -> float:
+    """Degrees between two hues, the short way round."""
+    gap = abs(float(a) - float(b)) % 360.0
+    return min(gap, 360.0 - gap)
+
+
 # The traits worth scoring, and how forgiving to be about each. A shot length
 # within 25% reads as the same pace; a caption sitting a tenth of a frame
 # lower does not read as a different design. These numbers are the argument.
@@ -119,6 +125,13 @@ TRAITS: tuple[Trait, ...] = (
     Trait("text", "typeface", "typeface", _same, 0.0, 0.0),
     Trait("text", "decor", "outline or shadow", _same, 0.0, 0.0),
     Trait("grade", "lab_mean", "colour", _lab_distance, 6.0, 14.0, "ΔLAB"),
+    # Per zone (analyze/zones.py). How far the face stands out from the room
+    # is most of what makes a reference read as graded.
+    Trait("grade", "face_above_background", "face above background", _abs, 6.0, 12.0, "L"),
+    Trait("grade", "background_l", "background brightness", _abs, 6.0, 12.0, "L"),
+    Trait("grade", "skin_chroma", "skin richness", _abs, 4.0, 8.0, "C"),
+    Trait("grade", "skin_hue", "skin hue", _angle, 6.0, 12.0, "°"),
+    Trait("grade", "shadow_tint", "shadow tint", _abs, 2.0, 4.0, "a*"),
 )
 
 

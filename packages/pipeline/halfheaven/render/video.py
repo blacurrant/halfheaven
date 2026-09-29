@@ -27,7 +27,7 @@ import subprocess
 from halfheaven.media.ffmpeg_bin import ffmpeg
 from halfheaven.media.probe import probe
 from halfheaven.render.captions import build_caption_track
-from halfheaven.schemas import Canvas, EditProgram, VideoClip
+from halfheaven.schemas import Canvas, EditProgram, VideoClip, ZoneGrade
 
 # A punch-in that snaps is invisible; one that eases over half a second reads as
 # deliberate camera emphasis.
@@ -219,6 +219,40 @@ def mask_track(program: EditProgram, kind: str, work_dir: str | pathlib.Path) ->
     return track
 
 
+def grade_filters(grade: ZoneGrade, source: str, subject: str, skin: str, height: int,
+                  out: str) -> list[str]:
+    """The colourist grade as filtergraph steps: `source` graded into `out`.
+
+    Three LUTs run side by side. The subject's is laid over the background's
+    through a feathered copy of the subject matte, then the skin's over that
+    through the skin matte - limited to the subject, because MediaPipe's skin
+    mask is coarse and spills onto the room, where it left a light ring round
+    faces. `subject` and `skin` are matte streams on the same frame grid as
+    `source`; `height` is its height.
+    """
+    def lut(path: str) -> str:
+        return f"lut3d=file='{path}':interp=tetrahedral"
+
+    # `erosion` shrinks a matte by one pixel per pass.
+    choke = ["erosion"] * max(0, round(grade.choke_pct * height))
+    sigma = grade.feather_pct * height
+    feather = [f"gblur=sigma={sigma:.2f}"] if sigma > 0 else []
+    matte = ",".join(["format=gray", *choke, *feather])
+    return [
+        f"{source}split=3[zs][zb][zk]",
+        f"[zb]{lut(grade.background_lut)}[zbg]",
+        f"[zs]{lut(grade.subject_lut)},format=yuva420p[zsg]",
+        f"{subject}{matte},split=2[zsm][zsn]",
+        "[zsg][zsm]alphamerge[zsa]",
+        "[zbg][zsa]overlay=0:0[zz]",
+        f"[zk]{lut(grade.skin_lut)},format=yuva420p[zkg]",
+        f"{skin}format=gray[zk1]",
+        f"[zk1][zsn]blend=all_mode=multiply,lut=c0='val*{grade.skin_weight:.3f}'[zkm]",
+        "[zkg][zkm]alphamerge[zka]",
+        f"[zz][zka]overlay=0:0{out}",
+    ]
+
+
 def build_finish_command(
     program: EditProgram,
     base_path: str | pathlib.Path,
@@ -256,9 +290,30 @@ def build_finish_command(
         input_count += 1
         return stream
 
-    if look.lut:
-        # Grade before letterboxing so the bars stay pure black, and before the
-        # captions so they keep the exact colour the profile asked for.
+    subject = subject_track or look.matte
+    # The colourist grade needs both mattes. Without either it falls back to
+    # the single LUT below, rather than grading some zones and not others.
+    zoned = look.zone_grade is not None and subject is not None and skin_track is not None
+    behind = subject is not None and any(c.behind for c in program.captions)
+    replace = subject is not None and look.background_hex is not None
+    mattes: list[str] = []
+    uses = int(zoned) + int(behind) + int(replace)
+    if uses:
+        # One read of the matte, split between the uses that need it.
+        matte = add_input("-i", str(subject))
+        if uses > 1:
+            steps.append(f"{matte}split={uses}" + "".join(f"[matte{k}]" for k in range(uses)))
+            mattes = [f"[matte{k}]" for k in range(uses)]
+        else:
+            mattes = [matte]
+
+    # Grade before letterboxing so the bars stay pure black, and before the
+    # captions so they keep the exact colour the profile asked for.
+    if zoned:
+        skin = add_input("-i", str(skin_track))
+        steps += grade_filters(look.zone_grade, label, mattes.pop(0), skin, height, "[vg]")
+        label = "[vg]"
+    elif look.lut:
         lut = f"lut3d=file='{look.lut}':interp=tetrahedral"
         if skin_track and look.skin_protect > 0:
             # The graded picture is laid over the ungraded one with the skin
@@ -273,19 +328,6 @@ def build_finish_command(
         else:
             steps.append(f"{label}{lut}[vg]")
         label = "[vg]"
-    subject = subject_track or look.matte
-    behind = subject is not None and any(c.behind for c in program.captions)
-    replace = subject is not None and look.background_hex is not None
-    mattes: list[str] = []
-    if behind or replace:
-        # One read of the matte, split between the uses that need it.
-        uses = int(behind) + int(replace)
-        matte = add_input("-i", str(subject))
-        if uses > 1:
-            steps.append(f"{matte}split={uses}" + "".join(f"[matte{k}]" for k in range(uses)))
-            mattes = [f"[matte{k}]" for k in range(uses)]
-        else:
-            mattes = [matte]
 
     if replace:
         # After the grade, so the plate is exactly the colour asked for; before
@@ -430,9 +472,11 @@ def render(
     )
 
     look = program.look
-    needs_subject = look.background_hex is not None or any(c.behind for c in program.captions)
+    zoned = look.zone_grade is not None
+    needs_subject = zoned or look.background_hex is not None or any(c.behind for c in program.captions)
     subject = mask_track(program, "subject", work_dir) if needs_subject else None
-    skin = mask_track(program, "skin", work_dir) if look.lut and look.skin_protect > 0 else None
+    wants_skin = zoned or (look.lut is not None and look.skin_protect > 0)
+    skin = mask_track(program, "skin", work_dir) if wants_skin else None
     _run(build_finish_command(program, base, out_path, work_dir, with_audio,
                               subject_track=subject, skin_track=skin), "finish")
     return out_path
