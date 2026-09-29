@@ -52,9 +52,10 @@ def make_tone(center, spread=50.0, chroma=8.0, tint=(0.0, 0.0), shadow_a=None):
 
 
 def make_look(subject_l=50.0, background_l=50.0, skin_l=45.0, skin_ab=(14.0, 16.0),
-              subject_chroma=8.0, background_chroma=8.0, background_tint=(0.0, 0.0), skin=True):
+              subject_chroma=8.0, background_chroma=8.0, background_tint=(0.0, 0.0),
+              subject_tint=(0.0, 0.0), skin=True):
     return ZoneLook(
-        subject=make_tone(subject_l, chroma=subject_chroma),
+        subject=make_tone(subject_l, chroma=subject_chroma, tint=subject_tint),
         background=make_tone(background_l, chroma=background_chroma, tint=background_tint),
         skin=SkinTone(ab=skin_ab, mean_l=skin_l, median_l=skin_l) if skin else None,
     )

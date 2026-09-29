@@ -92,3 +92,18 @@ def test_a_reference_without_zones_is_scored_as_a_fallback(tmp_path):
     report = evaluate_pair(str(WIDE), TakeMatte(subject=str(matte), skin=str(matte)), fingerprint, tmp_path / "pair")
     assert "colourist" not in report and "today" in report
     assert verdict([report])["fallback_pairs"] == [f"{WIDE} x fake.mp4"]
+
+
+def _graded_pair(face_l_change, face_lift, strength=0.7):
+    made = {"face_l_change": face_l_change, "seam": 0.0, "flicker_room": 0.0, "flicker_face": 0.0}
+    return {"take": "t.mp4", "reference": "r.mp4", "reference_summary": {}, "today": {},
+            "colourist": made, "controls": {"strength": strength, "face_lift": face_lift}}
+
+
+@pytest.mark.parametrize("face_l_change, face_lift, ok", [
+    (5.5, 8.0, True),       # moved as far as planned: 8 L at strength 0.7
+    (5.5, 0.0, False),      # moved when nothing was planned
+    (0.0, 8.0, False),      # planned but never reached the face
+])
+def test_the_face_is_judged_against_the_lift_the_grade_planned(face_l_change, face_lift, ok):
+    assert verdict([_graded_pair(face_l_change, face_lift)])["face_ok"] is ok

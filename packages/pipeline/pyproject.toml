@@ -14,6 +14,10 @@ matte = ["torch>=2.2", "absl-py", "flatbuffers", "certifi", "matplotlib"]
 # analyze/fingerprint.py, analyze/shots.py). Each falls back to the lighter
 # method when this is not installed.
 ml = ["whisperx>=3.8", "beat-this>=1.1", "transnetv2-pytorch>=1.0.5"]
+# Reading a reference's on-screen text (analyze/onscreen_text.py): what it says,
+# where, in what colour, and whether it is a caption track or written cards.
+# Without it text is found by shape alone, which passes walls and prints.
+ocr = ["rapidocr>=3.9", "onnxruntime>=1.20"]
 
 [build-system]
 requires = ["setuptools>=68"]

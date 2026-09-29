@@ -174,6 +174,10 @@ class Face:
     y: float        # centre, fraction of frame height
     height: float   # fraction of frame height
     score: float
+    # Eye line and mouth line, when the detector gives landmarks. Type may sit
+    # over hair or a forehead; the eyes and mouth are what it must not cover.
+    eyes_y: float | None = None
+    mouth_y: float | None = None
 
 
 class FaceDetector(Protocol):
@@ -208,7 +212,10 @@ class YuNetDetector:
         return [
             Face(x=float((row[0] + row[2] / 2) / self._width),
                  y=float((row[1] + row[3] / 2) / height),
-                 height=float(row[3] / height), score=float(row[14]))
+                 height=float(row[3] / height), score=float(row[14]),
+                 # YuNet landmarks: eyes at 4-7, nose 8-9, mouth corners 10-13
+                 eyes_y=float((row[5] + row[7]) / 2 / height),
+                 mouth_y=float((row[11] + row[13]) / 2 / height))
             for row in found
         ]
 

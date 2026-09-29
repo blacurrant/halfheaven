@@ -34,6 +34,7 @@ from typing import Any
 import cv2
 import numpy as np
 
+from halfheaven.analyze import onscreen_text
 from halfheaven.analyze.framing import detect_letterbox
 from halfheaven.analyze.shots import Shot, detect_shots, pacing
 from halfheaven.analyze.zones import reference_zone_look, summarise
@@ -389,7 +390,8 @@ def _decor_kind(darkness: float, lean: float) -> str:
     return "none"
 
 
-def _scan(path: pathlib.Path, stride: int = 1) -> tuple[list[FrameStats], list[np.ndarray], float]:
+def _scan(path: pathlib.Path, stride: int = 1, read: bool = True,
+          looks: list | None = None) -> tuple[list[FrameStats], list[np.ndarray], float]:
     """Decode once, collecting per-frame statistics and accent pixel samples.
 
     `stride` samples every nth frame. Masking type at native resolution is the
@@ -397,6 +399,10 @@ def _scan(path: pathlib.Path, stride: int = 1) -> tuple[list[FrameStats], list[n
     a second: a caption card lasts over a second, a shot lasts seconds. The
     returned rate is the *sampled* rate, so every duration downstream stays in
     real seconds rather than silently shrinking by the stride.
+
+    `read` confines type to where a text reader found words, when one is
+    installed. Shape alone passes a brick wall and a floral print as captions.
+    What it read is appended to `looks` as (seconds, lines).
     """
     # Structural black bars belong to the framing, not to the picture. Found
     # once for the whole file, since a letterbox that comes and goes is not a
@@ -411,14 +417,19 @@ def _scan(path: pathlib.Path, stride: int = 1) -> tuple[list[FrameStats], list[n
     accent_pixels: list[np.ndarray] = []
     previous: np.ndarray | None = None
     index = 0
+    reader = read and onscreen_text.available()
+    # Reading is slow beside masking, and text holds for over a second, so the
+    # reader looks twice a second and its boxes stand for the frames between.
+    read_every = max(1, round(fps * onscreen_text.SAMPLE_EVERY))
+    words_at: np.ndarray | None = None
 
-    read = 0
+    decoded = 0
     while True:
         ok, frame = capture.read()
         if not ok:
             break
-        read += 1
-        if (read - 1) % stride:
+        decoded += 1
+        if (decoded - 1) % stride:
             continue
         height = int(ANALYSIS_WIDTH * frame.shape[0] / frame.shape[1])
         small = cv2.resize(frame, (ANALYSIS_WIDTH, height))
@@ -435,6 +446,13 @@ def _scan(path: pathlib.Path, stride: int = 1) -> tuple[list[FrameStats], list[n
         # resizing averages it into the background before it can be masked.
         full_h, full_w = frame.shape[:2]
         bright, accent = _text_masks(frame)
+        if reader:
+            if index % read_every == 0:
+                lines = onscreen_text.read_frame(frame)
+                words_at = onscreen_text.text_mask(lines, frame.shape[:2])
+                if looks is not None:
+                    looks.append(((decoded - 1) / source_fps, lines))
+            bright, accent = bright & words_at, accent & words_at
         glyph, heights, labels, kept = _glyphs(bright, accent)
         area = float(glyph.sum()) / glyph.size
 
@@ -483,7 +501,7 @@ def _scan(path: pathlib.Path, stride: int = 1) -> tuple[list[FrameStats], list[n
         modal = _modal_share(content)
         texture = _textured_share(content, ignore=type_mask)
         stats.append(FrameStats(
-            t=(read - 1) / source_fps,
+            t=(decoded - 1) / source_fps,
             mean_rgb=tuple(float(v) for v in pixels.mean(0)[::-1]),
             modal_share=modal,
             graphic=modal > GRAPHIC_MODAL_SHARE and texture < GRAPHIC_MAX_TEXTURE,
@@ -1027,6 +1045,9 @@ class Fingerprint:
     # The reference's zones in full, for the colourist planner. Kept out of
     # `grade` because the /lab readout lists every grade reading.
     zone_look: dict | None = None
+    # What its text says, card by card, when a reader is installed. None means
+    # it was not read; an empty list means it was read and has no text.
+    onscreen: list | None = None
 
     def as_dict(self) -> dict:
         def unpack(value):
@@ -1054,7 +1075,8 @@ def extract_fingerprint(path: str | pathlib.Path, with_depth: bool = False,
     """Everything we can recover about how a reference was edited."""
     path = pathlib.Path(path)
     info = probe(path)
-    stats, accent_pixels, fps = _scan(path, stride=stride)
+    looks: list = []
+    stats, accent_pixels, fps = _scan(path, stride=stride, looks=looks)
     shots = detect_shots(path)
     zone_readings, zone_look = _grade_zones(path, stats)
 
@@ -1068,6 +1090,8 @@ def extract_fingerprint(path: str | pathlib.Path, with_depth: bool = False,
         text=_text(stats, accent_pixels, fps),
         grade=dataclasses.replace(_grade(path, stats), **zone_readings),
         zone_look=zone_look.model_dump() if zone_look else None,
+        onscreen=([dataclasses.asdict(e) for e in onscreen_text.group(looks, onscreen_text.SAMPLE_EVERY)]
+                  if onscreen_text.available() else None),
     )
     if with_depth:
         from halfheaven.analyze.depth import measure_depth

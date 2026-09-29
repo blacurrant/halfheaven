@@ -100,13 +100,17 @@ def test_zone_luts_at_zero_strength_are_identities(tmp_path):
             assert np.abs(entry(entries, size, *index) - expected).max() < 1 / 255, zone
 
 
-def test_the_skin_lut_keeps_skin_brightness_while_the_subject_lut_darkens_the_rest(tmp_path):
+def test_the_skin_lut_moves_skin_by_the_face_lift_and_the_subject_lut_keeps_its_blacks(tmp_path):
+    # The reference's face is 5 L brighter, so every skin tone moves up 5 L.
     controls = plan_grade(make_look(subject_l=55.0, skin_l=40.0), make_look(subject_l=20.0, skin_l=45.0), 1.0)
     paths = write_zone_luts(controls, tmp_path, size=17)
     _, skin = read_cube(paths["skin"])
     _, subject = read_cube(paths["subject"])
     for index in [(10, 7, 5), (12, 9, 8), (6, 4, 3)]:            # skin-like colours
         source = lightness(np.array(index, np.float32) / 16)
-        assert lightness(entry(skin, 17, *index)) == pytest.approx(source, abs=1.0)
+        assert lightness(entry(skin, 17, *index)) == pytest.approx(source + 5.0, abs=1.0)
     shirt = (14, 14, 15)                                          # a pale shirt, far above the face
-    assert lightness(entry(subject, 17, *shirt)) < lightness(np.array(shirt, np.float32) / 16) - 5
+    assert lightness(entry(subject, 17, *shirt)) <= lightness(np.array(shirt, np.float32) / 16) + 5.5
+    black = (1, 1, 1)                                             # dark hair: lifted as skin, not as the subject
+    assert lightness(entry(subject, 17, *black)) <= lightness(np.array(black, np.float32) / 16) + 2.0
+    assert lightness(entry(skin, 17, *black)) >= lightness(np.array(black, np.float32) / 16) + 4.0

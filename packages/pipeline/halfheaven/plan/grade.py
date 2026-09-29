@@ -59,4 +59,5 @@ def describe_controls(controls: GradeControls) -> str:
             f"exposure anchor x{controls.exposure_anchor:.2f}, "
             f"saturation subject x{controls.subject.saturation:.2f} "
             f"background x{controls.background.saturation:.2f}, "
-            f"skin richness x{controls.skin_chroma:.2f}, strength {controls.strength:.2f}")
+            f"skin richness x{controls.skin_chroma:.2f}, face {controls.face_lift:+.1f} L, "
+            f"strength {controls.strength:.2f}")

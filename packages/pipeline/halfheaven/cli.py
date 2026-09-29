@@ -12,6 +12,7 @@ import json
 import pathlib
 import sys
 
+from halfheaven.analyze import onscreen_text
 from halfheaven.analyze.matte import Matting
 from halfheaven.analyze.reference import build_style_profile
 from halfheaven.analyze.fingerprint import extract_fingerprint
@@ -25,6 +26,8 @@ from halfheaven.media.probe import probe
 from halfheaven.plan.builder import build_program
 from halfheaven.plan.chunking import chunk_captions
 from halfheaven.plan.editor import decide
+from halfheaven.plan.headings import (card_captions, card_styles, face_finder,
+                                      template_from, write_cards)
 from halfheaven.plan.reel import Reel
 from halfheaven.plan.overrides import apply_overrides
 from halfheaven.plan.subject_captions import place_around_subject
@@ -64,6 +67,38 @@ def profile_json(profile: StyleProfile) -> str:
     would silently turn the colourist grade off. Every run reads it afresh
     from the fingerprint."""
     return profile.model_dump_json(indent=2, exclude={"grade": {"zones"}})
+
+
+def written_text(reference: str, measured: dict, work: pathlib.Path):
+    """The reference's cards, when its text was written rather than transcribed.
+
+    None for a caption reel, a reel with no text, or when no text reader is
+    installed - in all of which the speech is captioned as before.
+    """
+    stored = measured.get("onscreen")
+    if stored is None:
+        events = onscreen_text.read_text(reference)
+    else:
+        events = [onscreen_text.TextEvent(
+            start=e["start"], end=e["end"],
+            lines=[onscreen_text.TextLine(text=l["text"], box=tuple(l["box"]),
+                                          fill_hex=l["fill_hex"], score=l["score"])
+                   for l in e["lines"]]) for e in stored]
+    if events is None:
+        return None, "no text reader installed"
+    heard = work / "reference_words.json"
+    spoken = [tuple(w) for w in json.loads(heard.read_text())] if heard.exists() else []
+    kind = onscreen_text.text_kind(events, spoken)
+    if kind != "authored":
+        return None, f"text is {kind}" + (
+            f" ({onscreen_text.coverage(events, spoken):.0%} of speech on screen)" if spoken else "")
+    template = template_from(events, probe(reference).duration)
+    if template is None:
+        return None, "written text, but no card held long enough to copy"
+    return template, (f"written text, not captions ({onscreen_text.coverage(events, spoken):.0%} "
+                      f"of speech on screen): {'a title and ' if template.title else ''}"
+                      f"{'numbered ' if template.numbered else ''}headings held "
+                      f"~{template.hold:.1f}s")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -118,6 +153,8 @@ def main(argv: list[str] | None = None) -> int:
         measured = extract_fingerprint(args.reference, stride=3).as_dict()
     profile = apply_fingerprint(profile, measured)
     print(f"      {describe(profile)}")
+    template, why = written_text(args.reference, measured, work)
+    print(f"      on-screen text: {why}")
 
     if args.overrides:
         # What the creator asked for, layered over what we measured.
@@ -182,6 +219,15 @@ def main(argv: list[str] | None = None) -> int:
           f"{len(decisions.punch_word_indices)} punch-ins, "
           f"{len(decisions.emphasis_word_indices)} emphasised words")
     write_decided(work, decisions)
+    cards = None
+    if template is not None:
+        try:
+            cards = write_cards(client, template, transcript)
+            (work / "cards.json").write_text(json.dumps(dataclasses.asdict(cards), indent=2))
+            print(f"      cards: {' / '.join(cards.title) or 'no title'}; "
+                  f"{len(cards.points)} headings: {'; '.join(p.text for p in cards.points)}")
+        except Exception as error:     # a caption track is still a finished edit
+            print(f"      could not write cards ({error}); captioning the speech instead")
 
     print("[4/5] building program")
     # The canvas follows the reference, not the upload: we are copying its
@@ -254,6 +300,17 @@ def main(argv: list[str] | None = None) -> int:
             "look": look,
         }
     )
+    if template is not None and cards is not None and cards.points:
+        # The reference wrote its text rather than transcribing the speech, so
+        # this edit does the same: its cards replace the caption track.
+        styles = card_styles(template, profile)
+        program = program.model_copy(update={
+            "captions": card_captions(cards, template, styles, transcript, decisions.cuts,
+                                      profile.trim.max_silence, program.video,
+                                      program.duration,
+                                      face=face_finder(program.video, program.canvas)),
+            "styles": {**program.styles, **styles},
+        })
     mode = profile.subject.captions
     if mattes and mode != "off" and program.captions:
         program = place_around_subject(program, mode, mask_track(program, "subject", work))

@@ -6,6 +6,7 @@ showed to be accurate about style and unreliable about position.
 """
 from __future__ import annotations
 
+import json
 import pathlib
 
 from halfheaven.analyze.framing import detect_letterbox
@@ -95,6 +96,10 @@ def build_style_profile(
         try:
             audio = extract_audio(video, work_dir / "reference.wav")
             reference_words = sharpen(client.transcribe(audio), audio).words
+            # Kept: whether the reference's text is its speech or something
+            # an editor wrote is decided against what was said, and when.
+            (work_dir / "reference_words.json").write_text(json.dumps(
+                [[w.text, round(w.start, 3)] for w in reference_words]))
             gaps = sorted(
                 max(0.0, b.start - a.end)
                 for a, b in zip(reference_words, reference_words[1:])

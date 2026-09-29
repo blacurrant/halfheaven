@@ -23,6 +23,7 @@ Today's grade (`render/lut.py`) matches the mean and spread of each LAB channel 
 ## Rules that do not bend
 
 1. **The creator's face keeps its own brightness.** Skin L is pinned to the corrected footage. Separation from the room is reached by moving the background, never by lightening or darkening skin toward the reference's person.
+   *Revised 2026-09-29:* a face held still read as ungraded against a graded room. The face now moves toward the reference's face by at most +8 / −4 L, as an exposure change with the whole subject moving with it. Skin keeps its hue and richness, so this is never a fairness filter. Skin takes no split tone, and the subject takes the room's split tone, never its own clothes'.
 2. **Every control is bounded** (table below). A reference can never push footage further than the bounds, whatever it contains.
 3. **Strength 0 is the identity.** `GradeProfile.strength` (the chat's `grade.strength` knob) scales every control.
 4. **No mattes, no zones.** If the reference has no person or any take lacks a subject or skin matte, today's global LUT runs unchanged.

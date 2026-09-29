@@ -29,7 +29,7 @@ from halfheaven.schemas import Canvas, EditProgram, Look, StyleProfile, TakeMatt
 
 SEAM_LIMIT = 2.0        # L: a rim or line the grade may add at the matte edge
 FLICKER_LIMIT = 1.0     # L per frame the grade may add over the room or the face
-FACE_LIMIT = 2.0        # L the face may move from the raw footage
+FACE_LIMIT = 2.0        # L the face may land from where the grade planned to take it
 # Rings round the matte's 0.5 contour, as shares of frame height.
 EDGE_RING = 0.0035
 NEAR_RING = (0.005, 0.014)
@@ -245,10 +245,16 @@ def verdict(reports: list[dict]) -> dict:
             wins[trait] = float(np.mean(gaps["colourist"])) < float(np.mean(gaps["today"]))
     zoned = [r["colourist"] for r in reports if "colourist" in r]
     within = lambda value, limit: value is None or abs(value) <= limit
+
+    def face_miss(report: dict) -> float | None:
+        change, controls = report["colourist"]["face_l_change"], report.get("controls") or {}
+        planned = controls.get("strength", 0.0) * controls.get("face_lift", 0.0)
+        return None if change is None else change - planned
+
     return {
         "trait_wins": wins,
         "wins": sum(wins.values()),
-        "face_ok": all(within(r["face_l_change"], FACE_LIMIT) for r in zoned),
+        "face_ok": all(within(face_miss(r), FACE_LIMIT) for r in reports if "colourist" in r),
         "seam_ok": all(within(r["seam"], SEAM_LIMIT) for r in zoned),
         "flicker_ok": all(r[k] is None or r[k] <= FLICKER_LIMIT for r in zoned for k in ("flicker_room", "flicker_face")),
         "fallback_pairs": [f"{r['take']} x {r['reference']}" for r in reports if "colourist" not in r],

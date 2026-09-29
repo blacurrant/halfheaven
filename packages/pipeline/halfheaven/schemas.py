@@ -178,11 +178,14 @@ class GradeControls(BaseModel):
     white_balance_ab: tuple[float, float] = (0.0, 0.0)
     white_balance_deg: float = 0.0
     # The reference's tonal layout is scaled by this so its skin sits where
-    # this creator's skin already is.
+    # this creator's face is being taken.
     exposure_anchor: float = 1.0
     subject: ZoneControls
     background: ZoneControls
     skin_chroma: float = 1.0
+    # How far the face moves toward the reference's face, in L; the rest of
+    # the subject moves with it.
+    face_lift: float = 0.0
 
 
 class ZoneGrade(BaseModel):

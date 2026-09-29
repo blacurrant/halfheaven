@@ -80,10 +80,19 @@ class _Token:
         self.height = self.size
 
 
+# A run holding only this ends the line: a title card stacks lines set in
+# different faces, which wrapping alone cannot express.
+LINE_BREAK = "\n"
+
+
 def _tokens(frame: CaptionFrame, canvas: Canvas, profile: CaptionProfile,
-            styles: dict[str, CaptionProfile] | None = None) -> list[_Token]:
-    out: list[_Token] = []
+            styles: dict[str, CaptionProfile] | None = None) -> list[_Token | None]:
+    """The card's words in order; None where a line must break."""
+    out: list[_Token | None] = []
     for index, run in enumerate(frame.shown):
+        if run.text == LINE_BREAK:
+            out.append(None)
+            continue
         # a run names its own style; the card's profile is the fallback, which
         # is what lets one line carry a mono body and a Didone punch
         own = (styles or {}).get(run.style) or profile
@@ -102,14 +111,19 @@ def _tokens(frame: CaptionFrame, canvas: Canvas, profile: CaptionProfile,
     return out
 
 
-def _lines(tokens: list[_Token], profile: CaptionProfile, max_width: float,
+def _lines(tokens: list[_Token | None], profile: CaptionProfile, max_width: float,
            space: float) -> list[list[_Token]]:
     if profile.layout == "stack":
-        return [[t] for t in tokens]
+        return [[t] for t in tokens if t is not None]
     lines: list[list[_Token]] = []
     current: list[_Token] = []
     width = 0.0
     for token in tokens:
+        if token is None:
+            if current:
+                lines.append(current)
+            current, width = [], 0.0
+            continue
         need = token.width + (space if current else 0)
         if current and width + need > max_width:
             lines.append(current)
@@ -136,7 +150,8 @@ def render_frame(frame: CaptionFrame, canvas: Canvas, profile: CaptionProfile,
     """
     out_path = pathlib.Path(out_path)
     image = Image.new("RGBA", (canvas.width, canvas.height), (0, 0, 0, 0))
-    tokens = _tokens(frame, canvas, profile, styles)
+    breaks = _tokens(frame, canvas, profile, styles)
+    tokens = [t for t in breaks if t is not None]
 
     if tokens:
         draw = ImageDraw.Draw(image)
@@ -144,7 +159,7 @@ def render_frame(frame: CaptionFrame, canvas: Canvas, profile: CaptionProfile,
         for token in tokens:
             token.fit(max_width)
         space = max(t.font.getlength(" ") for t in tokens)
-        lines = _lines(tokens, profile, max_width, space)
+        lines = _lines(breaks, profile, max_width, space)
 
         heights = [max(t.height for t in line) * LINE_SPACING for line in lines]
         block = sum(heights)
