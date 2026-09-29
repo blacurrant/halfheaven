@@ -95,7 +95,7 @@ export default function Waitlist() {
         </label>
       </div>
       {state === "error" && <p className={s.err} role="alert">{error}</p>}
-      <button className={`btn primary ${s.full}`} disabled={state === "sending"}>
+      <button className={`${s.btn} ${s.primary} ${s.full}`} disabled={state === "sending"}>
         {state === "sending" ? "Adding you…" : "Join the waitlist"}
       </button>
       <p className={s.formFine}>No spam. One email when your spot opens.</p>

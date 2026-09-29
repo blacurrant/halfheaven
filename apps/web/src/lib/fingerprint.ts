@@ -77,6 +77,15 @@ export function startRead(opts: { videoPath: string; name: string; depth: boolea
   let err = "";
   child.stdout.on("data", (chunk) => (out += chunk));
   child.stderr.on("data", (chunk) => (err += chunk));
+  // A spawn that never starts (no .venv) emits only "error", never "close",
+  // so without this the reading would sit at "running" forever.
+  child.on("error", (e) => {
+    const done = reads.get(id);
+    if (!done) return;
+    done.finishedAt = Date.now();
+    done.status = "error";
+    done.error = `Could not start the analyzer: ${e.message}`;
+  });
 
   child.on("close", (code) => {
     const done = reads.get(id);

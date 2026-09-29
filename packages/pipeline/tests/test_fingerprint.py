@@ -381,3 +381,18 @@ def test_every_caption_can_sit_somewhere_different(tmp_path):
 
     high, low = ink_row((0.5, 0.25)), ink_row((0.5, 0.75))
     assert low - high > canvas.height * 0.35, "the anchor did not move the card"
+
+
+@pytest.mark.parametrize("onsets, driver", [
+    ((np.array([]), 0.0, True), "speech"),                       # tracker heard no music
+    ((np.array([0.5, 1.0, 1.5, 2.0]), 0.5, True), None),         # music, but nothing cut to it
+    ((np.array([0.3, 0.7]), 0.4, False), None),                  # flux cannot tell music from speech
+])
+def test_one_continuous_take_is_never_called_a_montage(monkeypatch, onsets, driver):
+    from halfheaven.analyze import fingerprint
+    from halfheaven.analyze.shots import Shot
+
+    monkeypatch.setattr(fingerprint, "_onsets", lambda path: onsets)
+    rhythm = fingerprint._rhythm(None, [Shot(0.0, 30.0)], has_audio=True)
+    assert rhythm.driver.value == driver
+    assert not rhythm.on_beat_share
